@@ -7,13 +7,13 @@ LocalAPI details so future work doesn't have to re-derive them.
 
 ```
 src/
-  main.rs        CLI entry (Phase 0); will gain `tray`/`gui`/`daemon` subcommands
-  localapi.rs    typed LocalAPI client (blocking now; async added in Phase 2)
-  state.rs       state engine: watch-bus subscription + interval poll + broadcast
-  tray.rs        ksni tray: status icon + one-click tailnet switcher
-  config.rs      XDG TOML config (tray on/off, poll interval, pinned tailnets)
-  notify.rs      desktop notifications wrapper
-  gui/           iced application (main window, pages)
+  main.rs        CLI entry + subcommands (status/tailnets/switch/tray/watch)
+  localapi.rs    typed LocalAPI client: blocking request/response + the blocking
+                 watch-ipn-bus stream (Client::watch_live → LiveState)
+  tray.rs        ksni tray: status icon + one-click tailnet switcher (done)
+  config.rs      XDG TOML config (tray on/off, pinned tailnets)        [planned]
+  notify.rs      desktop notifications wrapper                          [planned]
+  gui/           iced application (main window, pages)                  [planned]
 ```
 
 A future split into a reusable `tsclient` crate + the `alavai` app is possible,
@@ -73,13 +73,21 @@ async client in Phase 2, not the blocking one.
 
 ## State model (mirrors trayscale's Poller)
 
-- One task subscribes to `watch-ipn-bus` and converts notifications into state
-  deltas (BackendState, Prefs, NetMap, Engine, BrowseToURL).
-- A second, slower interval tick provides a safety-net refresh and drives
-  profile/waiting-file polling (those aren't on the bus).
-- A canonical `AppState` is published via `tokio::sync::watch`; tray and GUI both
-  subscribe. Commands from the views go through a command channel so mutations are
-  serialised and always reflected back through the bus.
+Implemented with OS threads + `std::sync::mpsc` channels — no async runtime:
+
+- A **watch thread** runs `Client::watch_live`, a blocking reader of
+  `watch-ipn-bus`. It folds delta notifications (State, Prefs, NetMap;
+  BrowseToURL for login) into a merged `LiveState` and forwards it on change.
+- A **profile-poll thread** ticks every 10s for the profile list, which is *not*
+  delivered on the bus.
+- A **worker thread** owns the blocking `Client` and the `ksni` handle. It is the
+  single consumer of a command channel fed by the menu callbacks, the watch
+  thread (`Cmd::Live`), and the poll thread (`Cmd::RefreshProfiles`). It applies
+  each command and pushes the updated snapshot to the tray. Keeping all mutation
+  on one thread serialises updates and keeps blocking I/O out of `ksni`'s
+  update closures (which run on the tray service thread).
+
+The GUI (Phase 3) will subscribe to the same command/update flow.
 
 ## Tray (headline feature)
 

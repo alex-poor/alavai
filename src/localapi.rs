@@ -13,9 +13,10 @@
 //! "operator" (`sudo tailscale set --operator=$USER`), exactly as trayscale
 //! documents.
 
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
@@ -241,4 +242,229 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
         .position(|w| w == needle)
+}
+
+// ---------------------------------------------------------------------------
+// Event stream (watch-ipn-bus)
+// ---------------------------------------------------------------------------
+
+/// `ipn.State` value for a fully-connected backend.
+const STATE_RUNNING: i64 = 6;
+
+/// The notify-mask bits we subscribe to: initial State, Prefs and NetMap, plus
+/// rate-limiting of netmap spam. (Engine/bandwidth updates are intentionally
+/// omitted until Phase 4 needs per-peer stats.)
+const WATCH_MASK: u64 = (1 << 1) | (1 << 2) | (1 << 3) | (1 << 8);
+
+/// The live, continuously-updated slice of daemon state derived from the IPN
+/// bus. Fields persist across the delta notifications the bus emits.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LiveState {
+    pub online: bool,
+    pub exit_node_active: bool,
+    pub machine: String,
+    pub address: String,
+    pub control_url: String,
+    /// Set when the daemon wants the user to open a browser to authenticate.
+    pub browse_to_url: Option<String>,
+}
+
+impl Client {
+    /// Subscribes to the IPN bus and invokes `on_change` with the merged
+    /// [`LiveState`] every time it changes. Blocks forever, reconnecting after a
+    /// short delay if the stream drops (e.g. after a profile switch).
+    pub fn watch_live(&self, mut on_change: impl FnMut(LiveState)) {
+        loop {
+            if let Err(e) = self.watch_once(&mut on_change) {
+                eprintln!("alavai: watch-ipn-bus: {e}; reconnecting in 2s…");
+            }
+            std::thread::sleep(Duration::from_secs(2));
+        }
+    }
+
+    fn watch_once(&self, on_change: &mut impl FnMut(LiveState)) -> Result<()> {
+        let stream = UnixStream::connect(&self.socket_path)
+            .with_context(|| format!("connect to {}", self.socket_path))?;
+
+        let req = format!(
+            "GET /localapi/v0/watch-ipn-bus?mask={WATCH_MASK} HTTP/1.1\r\n\
+             Host: local-tailscaled.sock\r\n\
+             Connection: keep-alive\r\n\r\n"
+        );
+        (&stream).write_all(req.as_bytes())?;
+
+        let mut reader = BufReader::new(&stream);
+        read_headers(&mut reader)?;
+
+        let mut live = LiveState::default();
+        let mut linebuf: Vec<u8> = Vec::new();
+        loop {
+            let Some(size) = read_chunk_size(&mut reader)? else {
+                return Ok(()); // EOF / final chunk → let caller reconnect
+            };
+            let mut data = vec![0u8; size];
+            reader.read_exact(&mut data)?;
+            let mut crlf = [0u8; 2];
+            reader.read_exact(&mut crlf)?; // trailing CRLF after chunk data
+
+            linebuf.extend_from_slice(&data);
+            while let Some(pos) = linebuf.iter().position(|&b| b == b'\n') {
+                let line: Vec<u8> = linebuf.drain(..=pos).collect();
+                let trimmed = line.strip_suffix(b"\n").unwrap_or(&line);
+                if trimmed.is_empty() {
+                    continue;
+                }
+                match serde_json::from_slice::<Notify>(trimmed) {
+                    Ok(n) => {
+                        if merge_notify(&mut live, n) {
+                            on_change(live.clone());
+                        }
+                    }
+                    Err(e) => eprintln!("alavai: parse notify: {e}"),
+                }
+            }
+        }
+    }
+}
+
+/// Reads (and discards) HTTP response headers up to and including the blank line.
+fn read_headers(reader: &mut impl BufRead) -> Result<()> {
+    loop {
+        let mut line = String::new();
+        let n = reader.read_line(&mut line)?;
+        if n == 0 {
+            bail!("connection closed before headers completed");
+        }
+        if line == "\r\n" || line == "\n" {
+            return Ok(());
+        }
+    }
+}
+
+/// Reads one chunked-transfer size line. Returns `None` at end of stream or on
+/// the terminating zero-size chunk.
+fn read_chunk_size(reader: &mut impl BufRead) -> Result<Option<usize>> {
+    loop {
+        let mut line = String::new();
+        let n = reader.read_line(&mut line)?;
+        if n == 0 {
+            return Ok(None);
+        }
+        let s = line.trim();
+        if s.is_empty() {
+            continue; // tolerate stray blank lines between chunks
+        }
+        let hex = s.split(';').next().unwrap_or("0");
+        let size = usize::from_str_radix(hex, 16).context("parse chunk size")?;
+        return Ok(if size == 0 { None } else { Some(size) });
+    }
+}
+
+/// Folds a single notification into the running [`LiveState`], returning whether
+/// anything user-visible changed.
+fn merge_notify(live: &mut LiveState, n: Notify) -> bool {
+    let mut changed = false;
+
+    if let Some(state) = n.state {
+        let online = state == STATE_RUNNING;
+        if online != live.online {
+            live.online = online;
+            changed = true;
+        }
+    }
+
+    if let Some(p) = n.prefs {
+        let exit = !p.exit_node_id.is_empty() || !p.exit_node_ip.is_empty();
+        if exit != live.exit_node_active {
+            live.exit_node_active = exit;
+            changed = true;
+        }
+        if p.control_url != live.control_url {
+            live.control_url = p.control_url;
+            changed = true;
+        }
+    }
+
+    if let Some(sn) = n.netmap.and_then(|nm| nm.self_node) {
+        let machine = if !sn.hostinfo.hostname.is_empty() {
+            sn.hostinfo.hostname
+        } else {
+            sn.name.trim_end_matches('.').to_string()
+        };
+        if machine != live.machine {
+            live.machine = machine;
+            changed = true;
+        }
+        let address = pick_address(&sn.addresses);
+        if address != live.address {
+            live.address = address;
+            changed = true;
+        }
+    }
+
+    if let Some(url) = n.browse_to_url {
+        if !url.is_empty() && live.browse_to_url.as_deref() != Some(url.as_str()) {
+            live.browse_to_url = Some(url);
+            changed = true;
+        }
+    }
+
+    changed
+}
+
+/// Picks a display address from a node's CIDR list, preferring IPv4.
+fn pick_address(addrs: &[String]) -> String {
+    let strip = |a: &str| a.split('/').next().unwrap_or(a).to_string();
+    addrs
+        .iter()
+        .find(|a| !a.contains(':'))
+        .map(|a| strip(a))
+        .or_else(|| addrs.first().map(|a| strip(a)))
+        .unwrap_or_default()
+}
+
+// --- Notify wire types (only the fields alavai consumes) ---
+
+#[derive(Deserialize)]
+struct Notify {
+    #[serde(rename = "State", default)]
+    state: Option<i64>,
+    #[serde(rename = "Prefs", default)]
+    prefs: Option<NotifyPrefs>,
+    #[serde(rename = "NetMap", default)]
+    netmap: Option<NotifyNetMap>,
+    #[serde(rename = "BrowseToURL", default)]
+    browse_to_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct NotifyPrefs {
+    #[serde(rename = "ExitNodeID", default)]
+    exit_node_id: String,
+    #[serde(rename = "ExitNodeIP", default)]
+    exit_node_ip: String,
+    #[serde(rename = "ControlURL", default)]
+    control_url: String,
+}
+
+#[derive(Deserialize)]
+struct NotifyNetMap {
+    #[serde(rename = "SelfNode", default)]
+    self_node: Option<NotifySelfNode>,
+}
+
+#[derive(Deserialize)]
+struct NotifySelfNode {
+    #[serde(rename = "Name", default)]
+    name: String,
+    #[serde(rename = "Addresses", default)]
+    addresses: Vec<String>,
+    #[serde(rename = "Hostinfo", default)]
+    hostinfo: NotifyHostinfo,
+}
+
+#[derive(Deserialize, Default)]
+struct NotifyHostinfo {
+    #[serde(rename = "Hostname", default)]
+    hostname: String,
 }

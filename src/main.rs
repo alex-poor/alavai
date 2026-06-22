@@ -35,6 +35,8 @@ enum Command {
     },
     /// Run the system-tray daemon (one-click tailnet switching).
     Tray,
+    /// Stream live state changes from the daemon's IPN bus (debug).
+    Watch,
 }
 
 fn main() -> Result<()> {
@@ -99,6 +101,14 @@ fn main() -> Result<()> {
 
         Command::Tray => {
             tray::run()?;
+        }
+
+        Command::Watch => {
+            client.watch_live(|s| {
+                let conn = if s.online { "online" } else { "offline" };
+                let exit = if s.exit_node_active { " exit-node" } else { "" };
+                println!("[{conn}{exit}] {} {}", s.machine, s.address);
+            });
         }
     }
 

@@ -21,9 +21,12 @@ use ksni::blocking::{Handle, TrayMethods};
 use ksni::menu::{RadioGroup, RadioItem, StandardItem};
 use ksni::{Category, MenuItem, Status as IconStatus, ToolTip, Tray};
 
-use crate::localapi::{Client, Profile};
+use crate::localapi::{Client, LiveState, Profile};
 
-const POLL_INTERVAL: Duration = Duration::from_secs(5);
+/// How often to re-poll the profile list. Profiles are not delivered on the IPN
+/// bus, so they still need polling — but only this; everything else is
+/// event-driven via [`Client::watch_live`].
+const PROFILE_POLL_INTERVAL: Duration = Duration::from_secs(10);
 
 /// The slice of daemon state the tray renders.
 struct Snapshot {
@@ -62,9 +65,10 @@ impl Snapshot {
             .ok()
             .map(|p| p.id)
             .unwrap_or_default();
-        // exit_node_active is wired up in Phase 2 (reads prefs from the bus).
         Snapshot {
             online,
+            // Exit-node state is corrected within milliseconds by the first
+            // live delta from the bus.
             exit_node_active: false,
             machine,
             address,
@@ -72,16 +76,30 @@ impl Snapshot {
             current_id,
         }
     }
+
+    /// Applies a live delta from the IPN bus.
+    fn apply_live(&mut self, live: LiveState) {
+        self.online = live.online;
+        self.exit_node_active = live.exit_node_active;
+        if !live.machine.is_empty() {
+            self.machine = live.machine;
+        }
+        if !live.address.is_empty() {
+            self.address = live.address;
+        }
+    }
 }
 
-/// A request from the UI (menu) to the worker thread.
+/// A request to the worker thread, from either the menu or the watch stream.
 enum Cmd {
     /// Switch to the tailnet/profile with this LocalAPI id.
     Switch(String),
     /// Connect if offline, disconnect if online.
     ToggleConn,
-    /// Re-poll the daemon and re-render.
-    Refresh,
+    /// Live state delta from the IPN bus (online / exit-node / machine / addr).
+    Live(LiveState),
+    /// Re-poll the profile list (the one thing not on the bus).
+    RefreshProfiles,
     /// Tear down the tray and exit the process.
     Quit,
 }
@@ -206,13 +224,13 @@ impl Tray for AppTray {
             .into(),
         );
 
-        // Manual refresh.
+        // Manual refresh of the tailnet list.
         let tx = self.tx.clone();
         items.push(
             StandardItem {
                 label: "Refresh".into(),
                 activate: Box::new(move |_| {
-                    let _ = tx.send(Cmd::Refresh);
+                    let _ = tx.send(Cmd::RefreshProfiles);
                 }),
                 ..Default::default()
             }
@@ -279,13 +297,23 @@ pub fn run() -> Result<()> {
         anyhow!("could not start the tray ({e}); is a StatusNotifierItem host running in your desktop?")
     })?;
 
-    // Periodic refresh so external state changes appear.
+    // Event-driven updates: stream the IPN bus and forward live deltas.
+    {
+        let tx = tx.clone();
+        thread::spawn(move || {
+            Client::default().watch_live(move |live| {
+                let _ = tx.send(Cmd::Live(live));
+            });
+        });
+    }
+
+    // Profiles aren't on the bus, so poll just the profile list periodically.
     {
         let tx = tx.clone();
         thread::spawn(move || {
             loop {
-                thread::sleep(POLL_INTERVAL);
-                if tx.send(Cmd::Refresh).is_err() {
+                thread::sleep(PROFILE_POLL_INTERVAL);
+                if tx.send(Cmd::RefreshProfiles).is_err() {
                     break;
                 }
             }
@@ -299,12 +327,13 @@ pub fn run() -> Result<()> {
 
 fn worker(client: Client, rx: std::sync::mpsc::Receiver<Cmd>, handle: Handle<AppTray>) {
     for cmd in rx {
-        match cmd {
+        let alive = match cmd {
             Cmd::Switch(id) => {
                 if let Err(e) = client.switch_profile(&id) {
                     eprintln!("alavai: switch tailnet failed: {e}");
                 }
-                refresh(&client, &handle);
+                // Live bits update via the bus; confirm the active profile here.
+                refresh_profiles(&client, &handle)
             }
             Cmd::ToggleConn => {
                 let online = handle.update(|t| t.snap.online).unwrap_or(false);
@@ -312,24 +341,35 @@ fn worker(client: Client, rx: std::sync::mpsc::Receiver<Cmd>, handle: Handle<App
                 if let Err(e) = ProcCommand::new("tailscale").arg(action).status() {
                     eprintln!("alavai: `tailscale {action}` failed: {e}");
                 }
-                refresh(&client, &handle);
+                Some(()) // connection state arrives via the bus
             }
-            Cmd::Refresh => {
-                if refresh(&client, &handle).is_none() {
-                    break; // tray service gone
-                }
-            }
+            Cmd::Live(live) => handle.update(move |t| t.snap.apply_live(live)),
+            Cmd::RefreshProfiles => refresh_profiles(&client, &handle),
             Cmd::Quit => {
                 handle.shutdown().wait();
                 std::process::exit(0);
             }
+        };
+        if alive.is_none() {
+            break; // tray service shut down
         }
     }
 }
 
-/// Re-polls and pushes a fresh snapshot to the tray. Returns `None` if the tray
-/// service has shut down.
-fn refresh(client: &Client, handle: &Handle<AppTray>) -> Option<()> {
-    let snap = Snapshot::fetch(client);
-    handle.update(move |t| t.snap = snap)
+/// Re-polls the profile list and pushes it to the tray. Returns `None` if the
+/// tray service has shut down.
+fn refresh_profiles(client: &Client, handle: &Handle<AppTray>) -> Option<()> {
+    let tailnets = client
+        .profiles()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>();
+    let current_id = client.current_profile().ok().map(|p| p.id);
+    handle.update(move |t| {
+        t.snap.tailnets = tailnets;
+        if let Some(id) = current_id {
+            t.snap.current_id = id;
+        }
+    })
 }

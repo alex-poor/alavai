@@ -25,7 +25,7 @@ This document is the roadmap. It is organised as:
 | netcheck | shell `tailscale netcheck --format=json` | LocalAPI does not expose a full netcheck report cleanly; the CLI does. Avoids reimplementing DERP probing. |
 | Tray | `ksni` (StatusNotifierItem over D-Bus) | pure Rust; works on KDE, GNOME (+extension), and most WMs; this is where one-click switching lives |
 | GUI | `iced` | pure Rust, no GTK/Qt **system** libraries, single binary, consistent look in any DE/WM, software-render fallback for any distro |
-| Async | `tokio` | required for the long-lived `watch-ipn-bus` stream and concurrent commands |
+| Concurrency | OS threads + channels (no async runtime) | the `watch-ipn-bus` stream is a long-lived blocking read on its own thread; this keeps the binary lean and avoids mixing an async runtime with ksni's blocking API. Revisit `tokio` only if a future feature truly needs it. |
 | Notifications | `notify-rust` | freedesktop `org.freedesktop.Notifications`; DE-agnostic |
 | Config | `toml` + `directories` (XDG) | lets the user pin/order tailnets for the tray; stores prefs (tray on/off, poll interval) without GNOME `gsettings` |
 
@@ -94,8 +94,8 @@ to. ✅ done · 🟡 in progress · ⬜ planned.
 | --- | --- | --- |
 | Show status (online/offline, self addr) | ✅ CLI + tray · ⬜ gui | `GET /status` |
 | Connect / disconnect | 🟡 tray (via `tailscale up/down`) | `EditPrefs{WantRunning}` + `Start` planned |
-| Status tray icon (active/inactive/exit-node) | 🟡 tray (themed; pixmap fallback in P5) | derived from status/prefs |
-| Live event updates | ⬜ | `GET /watch-ipn-bus` (streaming) |
+| Status tray icon (active/inactive/exit-node) | ✅ tray, live (themed; pixmap fallback in P5) | derived from bus state/prefs |
+| Live event updates | ✅ | `GET /watch-ipn-bus` (blocking stream thread) |
 | Operator-not-set warning dialog | ⬜ | compare prefs operator vs `$USER` |
 | Desktop notifications on connect/disconnect | ⬜ | `notify-rust` |
 
@@ -174,13 +174,19 @@ Each phase is independently useful and ends in something runnable.
 - Non-blocking menu callbacks (channel → worker thread owning the client).
 - **Delivered: the headline feature, usable from the system tray.**
 
-### Phase 2 — Async state engine + live events  ⬅ next
-- Async `localapi` client (tokio + hyper + hyperlocal).
-- `watch-ipn-bus` subscriber → typed notification stream.
-- State engine broadcasting snapshots; tray becomes event-driven + instant.
-- Connect/disconnect, exit-node toggle, notifications on state change.
+### Phase 2 — Event-driven state via `watch-ipn-bus`  ✅
+- `Client::watch_live`: a blocking IPN-bus reader (chunked HTTP, newline-delimited
+  JSON) on its own thread — **no async runtime, no new dependencies**.
+- Folds delta notifications (State / Prefs / NetMap) into a merged `LiveState`
+  and emits only on change.
+- Tray is now event-driven: online state, exit-node state, machine and address
+  update live; the old 5s full poll is gone. Profiles (not on the bus) still poll
+  every 10s.
+- Auto-reconnects when the stream drops (e.g. after a profile switch).
+- `alavai watch` debug subcommand streams `LiveState` changes.
+- Verified live: `[online] diablo 100.69.38.30`.
 
-### Phase 3 — GUI shell (iced)
+### Phase 3 — GUI shell (iced)  ⬅ next
 - Main window opened from tray; self page (addresses, toggles) + peer list.
 - Reactive binding to the state engine.
 - Copy-to-clipboard, toasts, connect/disconnect, basic exit-node selection.
@@ -207,8 +213,9 @@ Each phase is independently useful and ends in something runnable.
   returned `HTTP 204` with only `Host: local-tailscaled.sock` — no CSRF
   rejection. Mutating calls work; `EditPrefs` (PATCH) still to be exercised in
   Phase 2.
-- **`watch-ipn-bus` framing:** the stream is length-delimited JSON; needs the
-  async client (Phase 2). Until then the tray interval-polls.
+- **`watch-ipn-bus` framing:** ✅ resolved. Chunked HTTP carrying
+  newline-delimited JSON `Notify` deltas; parsed by a blocking stream thread
+  (`Client::watch_live`). No async runtime required.
 - **netmap richness:** some per-peer fields trayscale reads come from Go-typed
   views; confirm they're all present in the JSON `status`/netmap. May need
   `tailscale status --json` to supplement.
