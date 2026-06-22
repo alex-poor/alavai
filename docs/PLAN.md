@@ -199,6 +199,10 @@ Each phase is independently useful and ends in something runnable.
   benefit: **tokio is no longer a dependency at all.**
 
 ### Phase 4 — Full feature parity  ⬅ next
+> **UI design pass first.** Before building these out, the UI is going through a
+> design review — see [UI-HANDOVER.md](UI-HANDOVER.md), which describes each
+> feature below in user terms and how it should surface in the interface.
+
 - Exit nodes (incl. advertise + LAN access), Mullvad picker.
 - Advertise/accept routes (add/remove prefixes).
 - Taildrop send (dialog + drag-and-drop + "open with") and receive (save/delete).
