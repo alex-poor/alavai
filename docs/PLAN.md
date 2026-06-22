@@ -112,18 +112,18 @@ to. ✅ done · 🟡 in progress · ⬜ planned.
 ### Exit nodes
 | trayscale feature | alavai | LocalAPI |
 | --- | --- | --- |
-| Use a peer as exit node | ⬜ | `EditPrefs{ExitNodeID}` |
+| Use a peer as exit node | ✅ backend/CLI · ⬜ gui | `EditPrefs{ExitNodeID}` |
 | Toggle "use exit node" (auto-suggest) | ⬜ | `SetUseExitNode` / suggest endpoint |
-| Advertise this machine as exit node | ⬜ | `EditPrefs{AdvertiseRoutes 0.0.0.0/0,::/0}` |
-| Allow LAN access while using exit node | ⬜ | `EditPrefs{ExitNodeAllowLANAccess}` |
+| Advertise this machine as exit node | ✅ backend/CLI · ⬜ gui | `EditPrefs{AdvertiseRoutes 0.0.0.0/0,::/0}` |
+| Allow LAN access while using exit node | ✅ backend/CLI · ⬜ gui | `EditPrefs{ExitNodeAllowLANAccess}` |
 | Mullvad exit nodes by country/city | ⬜ | filter peers tagged `mullvad-exit-node`; cap `mullvad` |
 
 ### Routes
 | trayscale feature | alavai | LocalAPI |
 | --- | --- | --- |
-| Accept subnet routes | ⬜ | `EditPrefs{RouteAll}` |
-| Advertise subnet routes (add/remove prefix) | ⬜ | `EditPrefs{AdvertiseRoutes}` |
-| View peer's advertised/primary routes | ⬜ | from netmap |
+| Accept subnet routes | ✅ backend/CLI · ⬜ gui | `EditPrefs{RouteAll}` |
+| Advertise subnet routes (add/remove prefix) | ✅ backend/CLI · ⬜ gui | `EditPrefs{AdvertiseRoutes}` |
+| View peer's advertised/primary routes | ✅ backend/CLI · ⬜ gui | `status` peer `PrimaryRoutes` |
 
 ### Taildrop (file transfer)
 | trayscale feature | alavai | LocalAPI |
@@ -137,8 +137,8 @@ to. ✅ done · 🟡 in progress · ⬜ planned.
 ### Diagnostics & per-peer detail
 | trayscale feature | alavai | source |
 | --- | --- | --- |
-| netcheck (UDP, IPv4/6, UPnP/PMP/PCP, captive portal, DERP, latencies) | ⬜ | `tailscale netcheck --format=json` |
-| Per-peer: addresses, online, last seen, created, last handshake, rx/tx | 🟡 gui (name/online/IP); detail page in P4 | `status` peers; netmap/engine for the rest |
+| netcheck (UDP, IPv4/6, UPnP/PMP/PCP, captive portal, DERP, latencies) | ✅ backend/CLI · ⬜ gui | `tailscale netcheck --format=json` |
+| Per-peer: addresses, online, last seen, last handshake, rx/tx, relay, routes | ✅ backend/CLI · ⬜ gui detail page | `status` peers (incl. `LastSeen`, `RxBytes`, `Relay`, …) |
 | Copy address / FQDN to clipboard | ✅ gui (addresses) | `iced::clipboard` (no extra crate) |
 
 ### App / settings
@@ -202,6 +202,15 @@ Each phase is independently useful and ends in something runnable.
 > **UI design pass first.** Before building these out, the UI is going through a
 > design review — see [UI-HANDOVER.md](UI-HANDOVER.md), which describes each
 > feature below in user terms and how it should surface in the interface.
+>
+> **Backend-first progress.** The design-independent plumbing is already done and
+> verified via the CLI, ahead of the UI: a typed `prefs()` reader and an
+> `edit_prefs` (masked-prefs `PATCH`) writer with safe setters for exit node,
+> accept-routes, allow-LAN, advertise-exit-node, and advertise-routes; richer peer
+> data (last seen/handshake, rx/tx, relay, primary routes); and `netcheck`.
+> Exposed as `alavai prefs | peers | netcheck | exit-node | accept-routes |
+> lan-access | advertise-exit-node | advertise-routes`. The GUI just needs to wire
+> to these once the design lands.
 
 - Exit nodes (incl. advertise + LAN access), Mullvad picker.
 - Advertise/accept routes (add/remove prefixes).

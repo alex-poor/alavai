@@ -55,6 +55,17 @@ cargo run -- status      # current connection status + active tailnet
 cargo run -- tailnets    # list configured tailnets (● = active)
 cargo run -- switch karo # switch by id, name, or domain
 cargo run -- watch       # stream live state changes (debug)
+
+cargo run -- prefs       # show exit-node / routes / toggle state
+cargo run -- peers       # list peers (online, IP, relay, routes, traffic)
+cargo run -- netcheck    # connectivity diagnostics
+
+# mutating (route through the daemon's prefs):
+cargo run -- exit-node <peer|none>      # use a peer as exit node
+cargo run -- accept-routes <on|off>
+cargo run -- lan-access <on|off>        # LAN access while using an exit node
+cargo run -- advertise-exit-node <on|off>
+cargo run -- advertise-routes 192.168.1.0/24 …   # (omit to clear)
 ```
 
 The tray exposes each configured tailnet as a one-click item, plus

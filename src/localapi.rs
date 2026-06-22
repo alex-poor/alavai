@@ -19,7 +19,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
+use serde_json::json;
 
 const SOCKET_PATHS: &[&str] = &[
     "/run/tailscale/tailscaled.sock",
@@ -109,6 +110,69 @@ impl Client {
         self.request("POST", &format!("/localapi/v0/profiles/{id}"), &[])?;
         Ok(())
     }
+
+    /// Returns the current node preferences (the toggles behind exit nodes,
+    /// routes, etc.).
+    pub fn prefs(&self) -> Result<Prefs> {
+        let body = self.get("/localapi/v0/prefs")?;
+        serde_json::from_slice(&body).context("parse prefs JSON")
+    }
+
+    /// Applies a "masked prefs" edit. `masked` must contain the changed `Prefs`
+    /// fields plus a `<Field>Set: true` marker for each, e.g.
+    /// `{"RouteAll": true, "RouteAllSet": true}`.
+    fn edit_prefs(&self, masked: serde_json::Value) -> Result<()> {
+        let body = serde_json::to_vec(&masked).context("serialize masked prefs")?;
+        self.request("PATCH", "/localapi/v0/prefs", &body)?;
+        Ok(())
+    }
+
+    /// Uses the peer with the given stable node ID as this node's exit node.
+    /// An empty `id` clears the exit node.
+    pub fn set_exit_node(&self, id: &str) -> Result<()> {
+        let masked = if id.is_empty() {
+            json!({"ExitNodeID": "", "ExitNodeIDSet": true, "ExitNodeIP": "", "ExitNodeIPSet": true})
+        } else {
+            json!({"ExitNodeID": id, "ExitNodeIDSet": true})
+        };
+        self.edit_prefs(masked)
+    }
+
+    /// Whether to keep access to the local LAN while using an exit node.
+    pub fn set_exit_node_allow_lan(&self, allow: bool) -> Result<()> {
+        self.edit_prefs(json!({
+            "ExitNodeAllowLANAccess": allow,
+            "ExitNodeAllowLANAccessSet": true,
+        }))
+    }
+
+    /// Whether to accept subnet routes advertised by other nodes.
+    pub fn set_accept_routes(&self, accept: bool) -> Result<()> {
+        self.edit_prefs(json!({"RouteAll": accept, "RouteAllSet": true}))
+    }
+
+    /// Advertises (or stops advertising) this machine as an exit node, while
+    /// preserving any advertised subnet routes.
+    pub fn set_advertise_exit_node(&self, enable: bool) -> Result<()> {
+        let prefs = self.prefs()?;
+        let mut routes = prefs.subnet_routes();
+        if enable {
+            routes.push("0.0.0.0/0".into());
+            routes.push("::/0".into());
+        }
+        self.edit_prefs(json!({"AdvertiseRoutes": routes, "AdvertiseRoutesSet": true}))
+    }
+
+    /// Sets the advertised subnet routes, preserving exit-node advertisement.
+    pub fn set_advertise_routes(&self, subnets: &[String]) -> Result<()> {
+        let prefs = self.prefs()?;
+        let mut routes: Vec<String> = subnets.to_vec();
+        if prefs.advertises_exit_node() {
+            routes.push("0.0.0.0/0".into());
+            routes.push("::/0".into());
+        }
+        self.edit_prefs(json!({"AdvertiseRoutes": routes, "AdvertiseRoutesSet": true}))
+    }
 }
 
 /// A tailnet/login profile as reported by the LocalAPI.
@@ -122,8 +186,6 @@ pub struct Profile {
     pub network: NetworkProfile,
     #[serde(rename = "UserProfile", default)]
     pub user: UserProfile,
-    #[serde(rename = "ControlURL", default)]
-    pub control_url: String,
 }
 
 impl Profile {
@@ -150,16 +212,12 @@ pub struct NetworkProfile {
     pub domain: String,
     #[serde(rename = "DisplayName", default)]
     pub display_name: String,
-    #[serde(rename = "MagicDNSName", default)]
-    pub magic_dns_name: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct UserProfile {
     #[serde(rename = "LoginName", default)]
     pub login_name: String,
-    #[serde(rename = "DisplayName", default)]
-    pub display_name: String,
 }
 
 /// A view of the LocalAPI `status` response (the fields alavai consumes).
@@ -192,6 +250,9 @@ pub struct Node {
 /// A peer (another machine on the tailnet) from the `status` response.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Peer {
+    /// Stable node ID, used as the exit-node identifier.
+    #[serde(rename = "ID", default)]
+    pub id: String,
     #[serde(rename = "HostName", default)]
     pub hostname: String,
     #[serde(rename = "DNSName", default)]
@@ -208,6 +269,80 @@ pub struct Peer {
     /// True if this peer is *available* as an exit node.
     #[serde(rename = "ExitNodeOption", default)]
     pub exit_node_option: bool,
+    /// True if there's an active (recent) connection to this peer.
+    #[serde(rename = "Active", default)]
+    pub active: bool,
+    #[serde(rename = "RxBytes", default)]
+    pub rx_bytes: i64,
+    #[serde(rename = "TxBytes", default)]
+    pub tx_bytes: i64,
+    /// DERP relay region in use (empty if a direct connection).
+    #[serde(rename = "Relay", default)]
+    pub relay: String,
+    #[serde(rename = "LastSeen", default)]
+    pub last_seen: String,
+    #[serde(rename = "LastHandshake", default)]
+    pub last_handshake: String,
+    /// Subnet routes this peer advertises and serves.
+    #[serde(rename = "PrimaryRoutes", default, deserialize_with = "null_as_empty_vec")]
+    pub primary_routes: Vec<String>,
+}
+
+/// The current node preferences (the toggles behind exit nodes and routes).
+#[derive(Debug, Clone, Deserialize)]
+pub struct Prefs {
+    #[serde(rename = "ControlURL", default)]
+    pub control_url: String,
+    #[serde(rename = "RouteAll", default)]
+    pub route_all: bool,
+    #[serde(rename = "ExitNodeID", default)]
+    pub exit_node_id: String,
+    #[serde(rename = "ExitNodeIP", default)]
+    pub exit_node_ip: String,
+    #[serde(rename = "ExitNodeAllowLANAccess", default)]
+    pub exit_node_allow_lan: bool,
+    #[serde(rename = "AdvertiseRoutes", default, deserialize_with = "null_as_empty_vec")]
+    pub advertise_routes: Vec<String>,
+    #[serde(rename = "WantRunning", default)]
+    pub want_running: bool,
+    #[serde(rename = "OperatorUser", default)]
+    pub operator_user: String,
+    #[serde(rename = "ProfileName", default)]
+    pub profile_name: String,
+}
+
+impl Prefs {
+    /// True if this node currently uses an exit node.
+    pub fn exit_node_active(&self) -> bool {
+        !self.exit_node_id.is_empty() || !self.exit_node_ip.is_empty()
+    }
+
+    /// True if this node advertises itself as an exit node.
+    pub fn advertises_exit_node(&self) -> bool {
+        self.advertise_routes.iter().any(|r| is_default_route(r))
+    }
+
+    /// The advertised subnet routes, excluding the exit-node default routes.
+    pub fn subnet_routes(&self) -> Vec<String> {
+        self.advertise_routes
+            .iter()
+            .filter(|r| !is_default_route(r))
+            .cloned()
+            .collect()
+    }
+}
+
+fn is_default_route(route: &str) -> bool {
+    route == "0.0.0.0/0" || route == "::/0"
+}
+
+/// Deserializes a JSON array or `null` into a `Vec`, treating `null`/missing as
+/// empty. (Tailscale serializes empty route lists as `null`.)
+fn null_as_empty_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Option::<Vec<String>>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 /// Splits an HTTP/1.1 response into status + body, dechunking if necessary, and
@@ -288,7 +423,6 @@ pub struct LiveState {
     pub exit_node_active: bool,
     pub machine: String,
     pub address: String,
-    pub control_url: String,
     /// Set when the daemon wants the user to open a browser to authenticate.
     pub browse_to_url: Option<String>,
 }
@@ -403,10 +537,6 @@ fn merge_notify(live: &mut LiveState, n: Notify) -> bool {
             live.exit_node_active = exit;
             changed = true;
         }
-        if p.control_url != live.control_url {
-            live.control_url = p.control_url;
-            changed = true;
-        }
     }
 
     if let Some(sn) = n.netmap.and_then(|nm| nm.self_node) {
@@ -467,8 +597,6 @@ struct NotifyPrefs {
     exit_node_id: String,
     #[serde(rename = "ExitNodeIP", default)]
     exit_node_ip: String,
-    #[serde(rename = "ControlURL", default)]
-    control_url: String,
 }
 
 #[derive(Deserialize)]
@@ -491,4 +619,78 @@ struct NotifySelfNode {
 struct NotifyHostinfo {
     #[serde(rename = "Hostname", default)]
     hostname: String,
+}
+
+// ---------------------------------------------------------------------------
+// netcheck (connectivity diagnostics)
+// ---------------------------------------------------------------------------
+
+/// A connectivity diagnostics report. Obtained by running the `tailscale`
+/// CLI (`tailscale netcheck --format=json`) rather than the LocalAPI, which
+/// does not expose a full report.
+#[derive(Debug, Clone, Deserialize)]
+pub struct NetcheckReport {
+    #[serde(rename = "UDP", default)]
+    pub udp: bool,
+    #[serde(rename = "IPv4", default)]
+    pub ipv4: bool,
+    #[serde(rename = "IPv6", default)]
+    pub ipv6: bool,
+    #[serde(rename = "MappingVariesByDestIP", default, deserialize_with = "opt_bool")]
+    pub mapping_varies: Option<bool>,
+    #[serde(rename = "UPnP", default, deserialize_with = "opt_bool")]
+    pub upnp: Option<bool>,
+    #[serde(rename = "PMP", default, deserialize_with = "opt_bool")]
+    pub pmp: Option<bool>,
+    #[serde(rename = "PCP", default, deserialize_with = "opt_bool")]
+    pub pcp: Option<bool>,
+    #[serde(rename = "CaptivePortal", default, deserialize_with = "opt_bool")]
+    pub captive_portal: Option<bool>,
+    #[serde(rename = "PreferredDERP", default)]
+    pub preferred_derp: i64,
+    #[serde(rename = "GlobalV4", default)]
+    pub global_v4: String,
+    #[serde(rename = "GlobalV6", default)]
+    pub global_v6: String,
+    /// DERP region ID → round-trip latency in nanoseconds.
+    #[serde(rename = "RegionLatency", default)]
+    pub region_latency: std::collections::HashMap<String, i64>,
+}
+
+/// Runs a connectivity check via the `tailscale` CLI.
+pub fn netcheck() -> Result<NetcheckReport> {
+    let out = std::process::Command::new("tailscale")
+        .args(["netcheck", "--format=json"])
+        .output()
+        .context("run `tailscale netcheck` (is the tailscale CLI installed?)")?;
+    if !out.status.success() {
+        bail!(
+            "tailscale netcheck failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    serde_json::from_slice(&out.stdout).context("parse netcheck JSON")
+}
+
+/// Deserializes Tailscale's tri-state `opt.Bool` (a bool, or the strings
+/// "true"/"false"/"", or null) into `Option<bool>`.
+fn opt_bool<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum BoolOrStr {
+        Bool(bool),
+        Str(String),
+    }
+    Ok(match Option::<BoolOrStr>::deserialize(deserializer)? {
+        None => None,
+        Some(BoolOrStr::Bool(b)) => Some(b),
+        Some(BoolOrStr::Str(s)) => match s.as_str() {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        },
+    })
 }
