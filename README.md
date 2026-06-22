@@ -5,9 +5,9 @@ re-implementation of the core functionality of
 [trayscale](https://github.com/DeedleFake/trayscale), with **one-click tailnet
 switching** built in from the start.
 
-> Status: **early scaffold (Phase 0).** A working CLI over the Tailscale
-> LocalAPI exists and proves the core path (list/switch tailnets). The tray and
-> GUI are in progress — see [docs/PLAN.md](docs/PLAN.md).
+> Status: **Phase 1.** A working system-tray daemon delivers the headline
+> feature — right-click → pick a tailnet → switch instantly — alongside a CLI
+> over the Tailscale LocalAPI. The GUI is next; see [docs/PLAN.md](docs/PLAN.md).
 
 ## Goals
 
@@ -42,13 +42,19 @@ sudo tailscale set --operator=$USER
 | Notifications  | `notify-rust`                           | freedesktop notifications, DE-agnostic |
 | Config         | `toml` + `directories` (XDG)            | declare/pin tailnets for the tray |
 
-## Try the Phase-0 CLI
+## Usage
 
 ```sh
+cargo run -- tray        # run the system-tray daemon (one-click tailnet switching)
+
 cargo run -- status      # current connection status + active tailnet
 cargo run -- tailnets    # list configured tailnets (● = active)
 cargo run -- switch karo # switch by id, name, or domain
 ```
+
+The tray exposes each configured tailnet as a one-click item, plus
+connect/disconnect, refresh, and quit. It needs a StatusNotifierItem host
+(KDE, GNOME with the AppIndicator extension, or most tray-capable WMs).
 
 ## License
 

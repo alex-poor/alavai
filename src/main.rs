@@ -4,6 +4,7 @@
 //! (`ksni`) and GUI (`iced`) land in later phases — see docs/PLAN.md.
 
 mod localapi;
+mod tray;
 
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
@@ -32,6 +33,8 @@ enum Command {
         /// Tailnet ID, profile name, or domain (e.g. "karo.co.nz").
         tailnet: String,
     },
+    /// Run the system-tray daemon (one-click tailnet switching).
+    Tray,
 }
 
 fn main() -> Result<()> {
@@ -92,6 +95,10 @@ fn main() -> Result<()> {
             };
             client.switch_profile(&p.id)?;
             println!("Switched to {}", p.label());
+        }
+
+        Command::Tray => {
+            tray::run()?;
         }
     }
 

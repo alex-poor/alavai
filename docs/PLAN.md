@@ -92,9 +92,9 @@ to. ✅ done · 🟡 in progress · ⬜ planned.
 ### Connection & status
 | trayscale feature | alavai | LocalAPI / mechanism |
 | --- | --- | --- |
-| Show status (online/offline, self addr) | ✅ CLI · ⬜ tray/gui | `GET /status` |
-| Connect / disconnect | ⬜ | `EditPrefs{WantRunning}` + `Start`, or `tailscale up/down` |
-| Status tray icon (active/inactive/exit-node) | ⬜ | derived from status/prefs |
+| Show status (online/offline, self addr) | ✅ CLI + tray · ⬜ gui | `GET /status` |
+| Connect / disconnect | 🟡 tray (via `tailscale up/down`) | `EditPrefs{WantRunning}` + `Start` planned |
+| Status tray icon (active/inactive/exit-node) | 🟡 tray (themed; pixmap fallback in P5) | derived from status/prefs |
 | Live event updates | ⬜ | `GET /watch-ipn-bus` (streaming) |
 | Operator-not-set warning dialog | ⬜ | compare prefs operator vs `$USER` |
 | Desktop notifications on connect/disconnect | ⬜ | `notify-rust` |
@@ -102,9 +102,9 @@ to. ✅ done · 🟡 in progress · ⬜ planned.
 ### Tailnet / profile switching (headline)
 | trayscale feature | alavai | LocalAPI |
 | --- | --- | --- |
-| List login profiles | ✅ CLI | `GET /profiles/` |
-| Current profile + active indicator | ✅ CLI | `GET /profiles/current` |
-| **One-click switch from tray** | 🟡 CLI done; tray next | `POST /profiles/{id}` |
+| List login profiles | ✅ CLI + tray | `GET /profiles/` |
+| Current profile + active indicator | ✅ CLI + tray | `GET /profiles/current` |
+| **One-click switch from tray** | ✅ tray | `POST /profiles/{id}` (validated, HTTP 204) |
 | Add / log in to a new tailnet | ⬜ | `POST /profiles/` + `login-interactive` |
 | Remove / forget a tailnet | ⬜ | `DELETE /profiles/{id}` |
 | Interactive login (browse-to-URL) | ⬜ | `login-interactive` + watch `BrowseToURL` |
@@ -164,15 +164,17 @@ Each phase is independently useful and ends in something runnable.
 - CLI: `alavai status | tailnets | switch <tailnet>`.
 - **Proves the headline path in Rust against a live daemon.**
 
-### Phase 1 — Tray daemon with one-click tailnet switching  ⬅ next
-- Add `ksni`; render an SNI tray icon with a menu.
-- Top-level, one-click tailnet items (radio-style, `●` on active) → `switch_profile`.
-- Connect/disconnect, "open window" (stub), quit.
-- Status-driven icon (connected / disconnected / exit-node).
-- Interval refresh of profile + status (watch stream comes in Phase 2).
-- **Deliverable: the headline feature, usable from the system tray.**
+### Phase 1 — Tray daemon with one-click tailnet switching  ✅
+- `ksni` (blocking API) SNI tray icon + menu — `alavai tray`.
+- Radio-group tailnet switcher: one click → `switch_profile`, with optimistic
+  active indicator and worker-thread confirmation.
+- Connect/disconnect (via `tailscale up/down`), manual refresh, quit.
+- Status-driven themed icon (connected / disconnected / exit-node) + tooltip.
+- 5s interval refresh (watch stream replaces it in Phase 2).
+- Non-blocking menu callbacks (channel → worker thread owning the client).
+- **Delivered: the headline feature, usable from the system tray.**
 
-### Phase 2 — Async state engine + live events
+### Phase 2 — Async state engine + live events  ⬅ next
 - Async `localapi` client (tokio + hyper + hyperlocal).
 - `watch-ipn-bus` subscriber → typed notification stream.
 - State engine broadcasting snapshots; tray becomes event-driven + instant.
@@ -201,11 +203,10 @@ Each phase is independently useful and ends in something runnable.
 
 ## 5. Risks & open questions
 
-- **LocalAPI POST/CSRF:** GET works unauthenticated over the socket (validated).
-  Mutating calls (`switch_profile`, `EditPrefs`) need confirming against the
-  daemon's header checks; the Go client sets only `Host: local-tailscaled.sock`.
-  Switch was implemented but intentionally **not** executed during scaffolding to
-  avoid disrupting the live tailnet. First Phase-1 task: verify on a test profile.
+- **LocalAPI POST/CSRF:** ✅ resolved. A no-op `POST /profiles/{current}`
+  returned `HTTP 204` with only `Host: local-tailscaled.sock` — no CSRF
+  rejection. Mutating calls work; `EditPrefs` (PATCH) still to be exercised in
+  Phase 2.
 - **`watch-ipn-bus` framing:** the stream is length-delimited JSON; needs the
   async client (Phase 2). Until then the tray interval-polls.
 - **netmap richness:** some per-peer fields trayscale reads come from Go-typed
