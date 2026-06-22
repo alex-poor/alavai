@@ -92,8 +92,8 @@ to. ✅ done · 🟡 in progress · ⬜ planned.
 ### Connection & status
 | trayscale feature | alavai | LocalAPI / mechanism |
 | --- | --- | --- |
-| Show status (online/offline, self addr) | ✅ CLI + tray · ⬜ gui | `GET /status` |
-| Connect / disconnect | 🟡 tray (via `tailscale up/down`) | `EditPrefs{WantRunning}` + `Start` planned |
+| Show status (online/offline, self addr) | ✅ CLI + tray + gui | `GET /status` |
+| Connect / disconnect | ✅ tray + gui (via `tailscale up/down`) | `EditPrefs{WantRunning}` + `Start` planned |
 | Status tray icon (active/inactive/exit-node) | ✅ tray, live (themed; pixmap fallback in P5) | derived from bus state/prefs |
 | Live event updates | ✅ | `GET /watch-ipn-bus` (blocking stream thread) |
 | Operator-not-set warning dialog | ⬜ | compare prefs operator vs `$USER` |
@@ -138,14 +138,14 @@ to. ✅ done · 🟡 in progress · ⬜ planned.
 | trayscale feature | alavai | source |
 | --- | --- | --- |
 | netcheck (UDP, IPv4/6, UPnP/PMP/PCP, captive portal, DERP, latencies) | ⬜ | `tailscale netcheck --format=json` |
-| Per-peer: addresses, online, last seen, created, last handshake, rx/tx | ⬜ | netmap + engine status |
-| Copy address / FQDN to clipboard | ⬜ | `arboard` crate |
+| Per-peer: addresses, online, last seen, created, last handshake, rx/tx | 🟡 gui (name/online/IP); detail page in P4 | `status` peers; netmap/engine for the rest |
+| Copy address / FQDN to clipboard | ✅ gui (addresses) | `iced::clipboard` (no extra crate) |
 
 ### App / settings
 | trayscale feature | alavai | mechanism |
 | --- | --- | --- |
 | Change control server URL (+ reset to default) | ⬜ | `EditPrefs{ControlURL}` + `Start` |
-| Admin console link | ⬜ | open `https://login.tailscale.com/admin` |
+| Admin console link | ✅ gui | open `https://login.tailscale.com/admin` |
 | Preferences: toggle tray icon, poll interval | ⬜ | TOML config |
 | Hide-window-on-start flag, autostart | ⬜ | CLI flag + `.desktop` autostart |
 | About dialog | ⬜ | GUI |
@@ -186,12 +186,19 @@ Each phase is independently useful and ends in something runnable.
 - `alavai watch` debug subcommand streams `LiveState` changes.
 - Verified live: `[online] diablo 100.69.38.30`.
 
-### Phase 3 — GUI shell (iced)  ⬅ next
-- Main window opened from tray; self page (addresses, toggles) + peer list.
-- Reactive binding to the state engine.
-- Copy-to-clipboard, toasts, connect/disconnect, basic exit-node selection.
+### Phase 3 — GUI shell (iced)  ✅
+- `alavai gui`: an iced window using the **tiny-skia software renderer** (no
+  wgpu/GPU dependency) — opened from the tray menu or left-click.
+- Shows connection state, this machine (with copy buttons), a one-click tailnet
+  switcher (pick-list), and the live peer list (online dots, IPs, exit-node tags).
+- Stays live via the same `watch_live` stream, exposed as an iced `Subscription`;
+  the view is a pure function of one `GuiSnapshot` rebuilt from `status` + profiles.
+- Connect/disconnect, copy-to-clipboard, admin-console link.
+- Switched ksni to its **async-io** backend so `zbus` runs its own executor —
+  iced_winit also opens a session bus, which panics under the tokio backend. Side
+  benefit: **tokio is no longer a dependency at all.**
 
-### Phase 4 — Full feature parity
+### Phase 4 — Full feature parity  ⬅ next
 - Exit nodes (incl. advertise + LAN access), Mullvad picker.
 - Advertise/accept routes (add/remove prefixes).
 - Taildrop send (dialog + drag-and-drop + "open with") and receive (save/delete).
@@ -219,7 +226,9 @@ Each phase is independently useful and ends in something runnable.
 - **netmap richness:** some per-peer fields trayscale reads come from Go-typed
   views; confirm they're all present in the JSON `status`/netmap. May need
   `tailscale status --json` to supplement.
-- **iced wgpu on headless/odd GPUs:** enable the `tiny-skia` software fallback;
-  keep `slint` as the escape hatch if needed.
+- **iced wgpu on headless/odd GPUs:** ✅ resolved by building iced with the
+  `tiny-skia` software renderer only (no wgpu). Verified: window renders correctly
+  over Wayland. Also required switching ksni to the `async-io` zbus backend so
+  iced_winit's session-bus connection doesn't panic.
 - **Mullvad capability detection:** depends on `CapMap`/tags in the JSON status —
   verify the field names.

@@ -11,13 +11,27 @@ src/
   localapi.rs    typed LocalAPI client: blocking request/response + the blocking
                  watch-ipn-bus stream (Client::watch_live → LiveState)
   tray.rs        ksni tray: status icon + one-click tailnet switcher (done)
+  gui.rs         iced window: status, switcher, peers, copy, connect (done)
   config.rs      XDG TOML config (tray on/off, pinned tailnets)        [planned]
   notify.rs      desktop notifications wrapper                          [planned]
-  gui/           iced application (main window, pages)                  [planned]
 ```
 
 A future split into a reusable `tsclient` crate + the `alavai` app is possible,
 but a single crate with modules is lighter and sufficient for now.
+
+## GUI notes (iced)
+
+- Built with the **tiny-skia software renderer** (no wgpu) so it runs on any
+  distro/VM/GPU-less setup and ships a smaller binary.
+- The window is a separate process (`alavai gui`), launched by the tray. This
+  keeps iced's winit event loop on the main thread, free of the tray's threads.
+- ksni uses its **async-io** zbus backend (not tokio). iced_winit opens a D-Bus
+  session connection, which panics under zbus's tokio backend with no ambient
+  runtime; async-io makes zbus run its own executor. As a bonus, the whole
+  project no longer depends on tokio.
+- The window subscribes to `Client::watch_live` (bridged to an iced
+  `Subscription` via `iced::stream::channel`) and rebuilds a `GuiSnapshot` from
+  the `status` response + profile list on every change.
 
 ## The LocalAPI
 

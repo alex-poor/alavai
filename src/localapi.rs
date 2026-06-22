@@ -27,6 +27,7 @@ const SOCKET_PATHS: &[&str] = &[
 ];
 
 /// A blocking handle to the local `tailscaled` daemon.
+#[derive(Clone)]
 pub struct Client {
     socket_path: String,
 }
@@ -161,7 +162,7 @@ pub struct UserProfile {
     pub display_name: String,
 }
 
-/// A minimal view of the LocalAPI `status` response. Expanded in later phases.
+/// A view of the LocalAPI `status` response (the fields alavai consumes).
 #[derive(Debug, Clone, Deserialize)]
 pub struct Status {
     #[serde(rename = "BackendState")]
@@ -170,6 +171,8 @@ pub struct Status {
     pub tailscale_ips: Vec<String>,
     #[serde(rename = "Self")]
     pub self_node: Option<Node>,
+    #[serde(rename = "Peer", default)]
+    pub peers: std::collections::HashMap<String, Peer>,
 }
 
 impl Status {
@@ -184,6 +187,27 @@ pub struct Node {
     pub hostname: String,
     #[serde(rename = "DNSName", default)]
     pub dns_name: String,
+}
+
+/// A peer (another machine on the tailnet) from the `status` response.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Peer {
+    #[serde(rename = "HostName", default)]
+    pub hostname: String,
+    #[serde(rename = "DNSName", default)]
+    pub dns_name: String,
+    #[serde(rename = "OS", default)]
+    pub os: String,
+    #[serde(rename = "TailscaleIPs", default)]
+    pub tailscale_ips: Vec<String>,
+    #[serde(rename = "Online", default)]
+    pub online: bool,
+    /// True if this peer is the node's *currently active* exit node.
+    #[serde(rename = "ExitNode", default)]
+    pub exit_node: bool,
+    /// True if this peer is *available* as an exit node.
+    #[serde(rename = "ExitNodeOption", default)]
+    pub exit_node_option: bool,
 }
 
 /// Splits an HTTP/1.1 response into status + body, dechunking if necessary, and

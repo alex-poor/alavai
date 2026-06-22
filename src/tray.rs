@@ -100,6 +100,8 @@ enum Cmd {
     Live(LiveState),
     /// Re-poll the profile list (the one thing not on the bus).
     RefreshProfiles,
+    /// Open the main window.
+    OpenWindow,
     /// Tear down the tray and exit the process.
     Quit,
 }
@@ -124,6 +126,11 @@ impl Tray for AppTray {
 
     fn status(&self) -> IconStatus {
         IconStatus::Active
+    }
+
+    /// Left-click opens the main window.
+    fn activate(&mut self, _x: i32, _y: i32) {
+        let _ = self.tx.send(Cmd::OpenWindow);
     }
 
     fn icon_name(&self) -> String {
@@ -165,6 +172,20 @@ impl Tray for AppTray {
             StandardItem {
                 label: self.header_line(),
                 enabled: false,
+                ..Default::default()
+            }
+            .into(),
+        );
+        items.push(MenuItem::Separator);
+
+        // Open the main window.
+        let tx = self.tx.clone();
+        items.push(
+            StandardItem {
+                label: "Open window".into(),
+                activate: Box::new(move |_| {
+                    let _ = tx.send(Cmd::OpenWindow);
+                }),
                 ..Default::default()
             }
             .into(),
@@ -345,6 +366,17 @@ fn worker(client: Client, rx: std::sync::mpsc::Receiver<Cmd>, handle: Handle<App
             }
             Cmd::Live(live) => handle.update(move |t| t.snap.apply_live(live)),
             Cmd::RefreshProfiles => refresh_profiles(&client, &handle),
+            Cmd::OpenWindow => {
+                match std::env::current_exe() {
+                    Ok(exe) => {
+                        if let Err(e) = ProcCommand::new(exe).arg("gui").spawn() {
+                            eprintln!("alavai: open window failed: {e}");
+                        }
+                    }
+                    Err(e) => eprintln!("alavai: locate executable: {e}"),
+                }
+                Some(())
+            }
             Cmd::Quit => {
                 handle.shutdown().wait();
                 std::process::exit(0);

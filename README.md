@@ -5,10 +5,12 @@ re-implementation of the core functionality of
 [trayscale](https://github.com/DeedleFake/trayscale), with **one-click tailnet
 switching** built in from the start.
 
-> Status: **Phase 2.** A system-tray daemon delivers the headline feature —
-> right-click → pick a tailnet → switch instantly — and now updates **live** from
-> the Tailscale event bus (connection, exit-node, machine, address), alongside a
-> CLI. The GUI is next; see [docs/PLAN.md](docs/PLAN.md).
+> Status: **Phase 3.** A system-tray daemon delivers the headline feature —
+> right-click → pick a tailnet → switch instantly — with **live** updates from the
+> Tailscale event bus, plus a main window (peers, tailnet switcher, copy, connect)
+> and a CLI. Full feature parity is next; see [docs/PLAN.md](docs/PLAN.md).
+
+![alavai main window](docs/screenshot.png)
 
 ## Goals
 
@@ -47,6 +49,7 @@ sudo tailscale set --operator=$USER
 
 ```sh
 cargo run -- tray        # run the system-tray daemon (one-click tailnet switching)
+cargo run -- gui         # open the main window
 
 cargo run -- status      # current connection status + active tailnet
 cargo run -- tailnets    # list configured tailnets (● = active)

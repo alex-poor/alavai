@@ -3,6 +3,7 @@
 //! Phase 0 ships a small CLI over the LocalAPI client. The tray daemon
 //! (`ksni`) and GUI (`iced`) land in later phases — see docs/PLAN.md.
 
+mod gui;
 mod localapi;
 mod tray;
 
@@ -35,6 +36,8 @@ enum Command {
     },
     /// Run the system-tray daemon (one-click tailnet switching).
     Tray,
+    /// Open the main window.
+    Gui,
     /// Stream live state changes from the daemon's IPN bus (debug).
     Watch,
 }
@@ -101,6 +104,10 @@ fn main() -> Result<()> {
 
         Command::Tray => {
             tray::run()?;
+        }
+
+        Command::Gui => {
+            gui::run()?;
         }
 
         Command::Watch => {
