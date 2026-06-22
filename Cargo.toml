@@ -1,0 +1,44 @@
+[package]
+name = "alavai"
+version = "0.0.1"
+edition = "2024"
+description = "A lightweight, distro-agnostic Tailscale client for Linux with one-click tailnet switching"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/alex-poor/alavai"
+readme = "README.md"
+keywords = ["tailscale", "vpn", "tray", "linux"]
+categories = ["command-line-utilities"]
+
+# Phase 0 keeps the dependency tree intentionally tiny: a blocking LocalAPI
+# client + CLI that already proves the headline path (list/switch tailnets).
+# Heavier deps (tokio/hyper for the watch stream, ksni for the tray, iced for
+# the GUI, notify-rust) are introduced in their respective phases — see
+# docs/PLAN.md. They are listed here, commented, so the intended tree is visible.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+
+# --- Phase 2: async + streaming LocalAPI (watch-ipn-bus) ---
+# tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
+# hyper = { version = "1", features = ["client", "http1"] }
+# hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "tokio"] }
+# hyperlocal = "0.9"
+# http-body-util = "0.1"
+#
+# --- Phase 1: tray ---
+# ksni = "0.2"
+#
+# --- Phase 3/4: GUI + notifications + config ---
+# iced = { version = "0.13", features = ["tokio", "image", "svg"] }
+# notify-rust = "4"
+# directories = "5"
+# toml = "0.8"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
