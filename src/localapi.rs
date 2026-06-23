@@ -245,6 +245,8 @@ pub struct Node {
     pub hostname: String,
     #[serde(rename = "DNSName", default)]
     pub dns_name: String,
+    #[serde(rename = "OS", default)]
+    pub os: String,
 }
 
 /// A peer (another machine on the tailnet) from the `status` response.

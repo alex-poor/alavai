@@ -5,10 +5,13 @@ re-implementation of the core functionality of
 [trayscale](https://github.com/DeedleFake/trayscale), with **one-click tailnet
 switching** built in from the start.
 
-> Status: **Phase 3.** A system-tray daemon delivers the headline feature —
-> right-click → pick a tailnet → switch instantly — with **live** updates from the
-> Tailscale event bus, plus a main window (peers, tailnet switcher, copy, connect)
-> and a CLI. Full feature parity is next; see [docs/PLAN.md](docs/PLAN.md).
+> Status: **Phase 3 + UI redesign (pass 1).** The main window now follows the
+> design system in [docs/design](docs/design) — a sidebar + detail layout with
+> light/dark tokens, the tailnet switcher and connection status in a persistent
+> header, a filterable peer list, this-machine settings wired to the daemon
+> (exit-node advertise, accept-routes, LAN access), and a peer detail view. The
+> tray delivers the headline one-click tailnet switching, live from the event bus.
+> Remaining design screens and feature parity are tracked in [docs/PLAN.md](docs/PLAN.md).
 
 ![alavai main window](docs/screenshot.png)
 

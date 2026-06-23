@@ -5,6 +5,7 @@
 
 mod gui;
 mod localapi;
+mod theme;
 mod tray;
 
 use anyhow::{Result, bail};
