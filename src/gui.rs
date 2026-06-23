@@ -6,13 +6,16 @@
 //! pure function of one `GuiSnapshot`, rebuilt from the LocalAPI `status` +
 //! `prefs` + profiles whenever the IPN bus signals a change.
 
-use std::fmt;
 use std::process::Command as ProcCommand;
 
 use anyhow::Result;
 use iced::futures::Stream;
-use iced::widget::{button, column, container, row, scrollable, text, text_input, toggler, Space};
-use iced::{Center, Color, Element, Fill, Font, Length, Size, Subscription, Task};
+use iced::widget::{
+    button, column, container, mouse_area, row, scrollable, stack, text, text_input, toggler, Space,
+};
+use iced::{Center, Color, Element, Fill, Font, Length, Padding, Size, Subscription, Task};
+
+use iced::alignment::{Horizontal, Vertical};
 
 use crate::icon::{self, icon};
 use crate::localapi::{Client, Profile};
@@ -48,6 +51,8 @@ struct GuiSnapshot {
     allow_lan: bool,
     advertised_routes: Vec<String>,
     peers: Vec<PeerView>,
+    /// Pending interactive-login URL from the bus (set while adding/logging in).
+    login_url: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -76,18 +81,6 @@ impl PeerView {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct TailnetChoice {
-    id: String,
-    label: String,
-}
-
-impl fmt::Display for TailnetChoice {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.label)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 enum Selection {
     ThisMachine,
@@ -103,6 +96,14 @@ struct State {
     busy: bool,
     switching: bool,
     toast: Option<String>,
+    /// Whether the tailnet-switcher popover is open.
+    switcher_open: bool,
+    /// Whether the switcher is in "manage" (remove) mode.
+    manage: bool,
+    /// Profile id pending a remove confirmation.
+    confirm_remove: Option<String>,
+    /// Last login URL we already opened, to avoid reopening on every refresh.
+    last_login_url: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -110,7 +111,7 @@ enum Message {
     Snapshot(GuiSnapshot),
     Select(Selection),
     Filter(String),
-    SwitchTailnet(TailnetChoice),
+    SwitchTailnet(String),
     ToggleConnection,
     SetAcceptRoutes(bool),
     SetAdvertiseExit(bool),
@@ -123,6 +124,14 @@ enum Message {
     OpenAdmin,
     Toast(String),
     ClearToast,
+    // Tailnet switcher popover
+    ToggleSwitcher,
+    CloseSwitcher,
+    ToggleManage,
+    RequestRemove(String),
+    ConfirmRemove(String),
+    CancelRemove,
+    AddTailnet,
 }
 
 // ---------------------------------------------------------------------------
@@ -188,6 +197,7 @@ fn fetch_gui(client: &Client) -> GuiSnapshot {
         allow_lan: prefs.as_ref().is_some_and(|p| p.exit_node_allow_lan),
         advertised_routes: prefs.as_ref().map(|p| p.subnet_routes()).unwrap_or_default(),
         peers,
+        login_url: None,
     }
 }
 
@@ -221,6 +231,10 @@ fn boot() -> (State, Task<Message>) {
             busy: false,
             switching: false,
             toast: None,
+            switcher_open: false,
+            manage: false,
+            confirm_remove: None,
+            last_login_url: None,
         },
         Task::none(),
     )
@@ -235,9 +249,22 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     state.selection = Selection::ThisMachine;
                 }
             }
+            // A new interactive-login URL means a sign-in is in progress: open
+            // the browser once and let the user know.
+            let new_login = snap
+                .login_url
+                .as_ref()
+                .filter(|u| state.last_login_url.as_deref() != Some(u.as_str()))
+                .cloned();
             state.snap = snap;
             state.busy = false;
             state.switching = false;
+            if let Some(url) = new_login {
+                state.last_login_url = Some(url.clone());
+                let _ = ProcCommand::new("xdg-open").arg(&url).spawn();
+                state.toast = Some("Opened your browser to finish signing in".into());
+                return delayed_clear();
+            }
             Task::none()
         }
         Message::Select(sel) => {
@@ -248,13 +275,14 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             state.filter = f;
             Task::none()
         }
-        Message::SwitchTailnet(choice) => {
-            if choice.id == state.snap.current_id {
+        Message::SwitchTailnet(id) => {
+            state.switcher_open = false;
+            state.manage = false;
+            if id == state.snap.current_id {
                 return Task::none();
             }
             state.busy = true;
             state.switching = true;
-            let id = choice.id;
             act(move |c| {
                 let _ = c.switch_profile(&id);
             })
@@ -327,6 +355,52 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             state.toast = None;
             Task::none()
         }
+        Message::ToggleSwitcher => {
+            state.switcher_open = !state.switcher_open;
+            state.manage = false;
+            state.confirm_remove = None;
+            Task::none()
+        }
+        Message::CloseSwitcher => {
+            state.switcher_open = false;
+            state.manage = false;
+            state.confirm_remove = None;
+            Task::none()
+        }
+        Message::ToggleManage => {
+            state.manage = !state.manage;
+            state.confirm_remove = None;
+            Task::none()
+        }
+        Message::RequestRemove(id) => {
+            state.confirm_remove = Some(id);
+            Task::none()
+        }
+        Message::CancelRemove => {
+            state.confirm_remove = None;
+            Task::none()
+        }
+        Message::ConfirmRemove(id) => {
+            state.confirm_remove = None;
+            state.busy = true;
+            act(move |c| {
+                let _ = c.delete_profile(&id);
+            })
+        }
+        Message::AddTailnet => {
+            state.switcher_open = false;
+            state.manage = false;
+            state.busy = true;
+            state.toast = Some("Creating tailnet — opening your browser to sign in…".into());
+            Task::batch([
+                act(|c| {
+                    if c.new_profile().is_ok() {
+                        let _ = c.start_login();
+                    }
+                }),
+                delayed_clear(),
+            ])
+        }
     }
 }
 
@@ -357,11 +431,36 @@ fn view(state: &State) -> Element<'_, Message> {
         );
     }
 
-    container(root)
+    let base = container(root)
         .width(Fill)
         .height(Fill)
-        .style(move |_| theme::window(p))
-        .into()
+        .style(move |_| theme::window(p));
+
+    if state.switcher_open {
+        let scrim = mouse_area(
+            container(Space::new().width(Fill).height(Fill)).style(|_| container::Style {
+                background: Some(Color { a: 0.35, ..Color::BLACK }.into()),
+                ..Default::default()
+            }),
+        )
+        .on_press(Message::CloseSwitcher);
+
+        let overlay = container(switcher_popover(state, p))
+            .width(Fill)
+            .height(Fill)
+            .align_x(Horizontal::Left)
+            .align_y(Vertical::Top)
+            .padding(Padding {
+                top: 54.0,
+                left: 12.0,
+                right: 0.0,
+                bottom: 0.0,
+            });
+
+        stack![base, scrim, overlay].into()
+    } else {
+        base.into()
+    }
 }
 
 fn header(state: &State, p: Palette) -> Element<'_, Message> {
@@ -377,16 +476,28 @@ fn header(state: &State, p: Palette) -> Element<'_, Message> {
         .spacing(8)
         .align_y(Center);
 
-    // Tailnet switcher (pick-list for now; popover comes later).
-    let choices: Vec<TailnetChoice> = snap
-        .tailnets
-        .iter()
-        .map(|t| TailnetChoice { id: t.id.clone(), label: t.label() })
-        .collect();
-    let selected = choices.iter().find(|c| c.id == snap.current_id).cloned();
-    let switcher = iced::widget::pick_list(choices, selected, Message::SwitchTailnet)
-        .text_size(13)
-        .padding([6, 10]);
+    // Tailnet switcher chip → opens the popover.
+    let cur_idx = snap.tailnets.iter().position(|t| t.id == snap.current_id).unwrap_or(0);
+    let (cur_name, cur_email) = match snap.tailnets.iter().find(|t| t.id == snap.current_id) {
+        Some(t) => (t.label(), t.user.login_name.clone()),
+        None => ("No tailnet".to_string(), String::new()),
+    };
+    let switcher = button(
+        row![
+            avatar_tile(&cur_name, theme::account_color(p, cur_idx), 24.0),
+            column![
+                text(cur_name).size(13).font(SEMI).color(p.text),
+                text(cur_email).size(10.5).font(MONO).color(p.text3),
+            ]
+            .spacing(0),
+            icon(icon::CHEVRON, 14.0, p.text3),
+        ]
+        .spacing(8)
+        .align_y(Center),
+    )
+    .style(theme::secondary_btn(p))
+    .padding([5, 10])
+    .on_press(Message::ToggleSwitcher);
 
     // Status pill.
     let (status_label, status_color, tint) = if state.switching {
@@ -795,6 +906,126 @@ fn picker_row(
     .into()
 }
 
+/// The tailnet-switcher popover (drops from the header chip).
+fn switcher_popover(state: &State, p: Palette) -> Element<'static, Message> {
+    let snap = &state.snap;
+
+    let edit_label = if state.manage { "Done" } else { "Edit" };
+    let header = row![
+        caps("TAILNETS".into(), p),
+        Space::new().width(Fill),
+        button(text(edit_label).size(12).color(p.accent))
+            .style(theme::small_btn(p))
+            .padding([3, 8])
+            .on_press(Message::ToggleManage),
+    ]
+    .align_y(Center);
+
+    let mut col = column![header].spacing(6);
+
+    for (idx, t) in snap.tailnets.iter().enumerate() {
+        let active = t.id == snap.current_id;
+        let name = t.label();
+        let info = column![
+            text(name.clone()).size(13.5).font(SEMI).color(p.text),
+            text(t.user.login_name.clone()).size(10.5).font(MONO).color(p.text3),
+        ]
+        .spacing(0);
+        let av = avatar_tile(&name, theme::account_color(p, idx), 30.0);
+
+        if state.manage {
+            let remove = button(text("Remove").size(11.5).color(p.danger))
+                .style(theme::secondary_btn(p))
+                .padding([4, 10])
+                .on_press(Message::RequestRemove(t.id.clone()));
+            col = col.push(
+                container(row![av, info, Space::new().width(Fill), remove].spacing(10).align_y(Center))
+                    .padding([7, 8]),
+            );
+            if state.confirm_remove.as_deref() == Some(t.id.as_str()) {
+                col = col.push(confirm_block(&name, &t.id, p));
+            }
+        } else {
+            let trailing: Element<Message> = if active {
+                icon(icon::CHECK, 18.0, p.accent)
+            } else {
+                Space::new().width(18).into()
+            };
+            col = col.push(
+                button(row![av, info, Space::new().width(Fill), trailing].spacing(10).align_y(Center))
+                    .width(Fill)
+                    .padding([7, 8])
+                    .style(theme::row_btn(p, active))
+                    .on_press(Message::SwitchTailnet(t.id.clone())),
+            );
+        }
+    }
+
+    col = col.push(divider(p));
+    col = col.push(
+        button(
+            row![icon(icon::PLUS, 16.0, p.accent), text("Add tailnet").size(13).color(p.accent)]
+                .spacing(8)
+                .align_y(Center),
+        )
+        .width(Fill)
+        .padding([8, 8])
+        .style(theme::row_btn(p, false))
+        .on_press(Message::AddTailnet),
+    );
+
+    container(col)
+        .width(Length::Fixed(330.0))
+        .padding(12)
+        .style(move |_| theme::card(p))
+        .into()
+}
+
+/// A small square avatar tile showing a name's initial.
+fn avatar_tile(name: &str, color: Color, size: f32) -> Element<'static, Message> {
+    let initial = name
+        .chars()
+        .next()
+        .map(|c| c.to_uppercase().to_string())
+        .unwrap_or_else(|| "?".into());
+    container(text(initial).size(size * 0.5).font(SEMI).color(Color::WHITE))
+        .center_x(size)
+        .center_y(size)
+        .style(theme::avatar(color))
+        .into()
+}
+
+/// The inline "forget this tailnet?" confirmation block.
+fn confirm_block(name: &str, id: &str, p: Palette) -> Element<'static, Message> {
+    let id = id.to_string();
+    container(
+        column![
+            text(format!("Forget {name}? You'll need to sign in again to use it."))
+                .size(12)
+                .color(p.text2),
+            row![
+                button(text("Remove").size(12).color(Color::WHITE))
+                    .style(theme::danger_btn(p))
+                    .padding([5, 12])
+                    .on_press(Message::ConfirmRemove(id)),
+                button(text("Keep").size(12).color(p.text))
+                    .style(theme::secondary_btn(p))
+                    .padding([5, 12])
+                    .on_press(Message::CancelRemove),
+            ]
+            .spacing(8),
+        ]
+        .spacing(8),
+    )
+    .padding(10)
+    .style(move |_| container::Style {
+        background: Some(with_alpha(p.danger, 0.10).into()),
+        border: iced::Border { color: p.danger, width: 1.0, radius: 7.0.into() },
+        ..Default::default()
+    })
+    .into()
+}
+
 // ---------------------------------------------------------------------------
 // Small view helpers
 // ---------------------------------------------------------------------------
@@ -937,8 +1168,10 @@ fn watch_stream() -> impl Stream<Item = Message> {
             let client = Client::default();
             let _ = output.try_send(Message::Snapshot(fetch_gui(&client)));
             let probe = client.clone();
-            client.watch_live(move |_live| {
-                let _ = output.try_send(Message::Snapshot(fetch_gui(&probe)));
+            client.watch_live(move |live| {
+                let mut snap = fetch_gui(&probe);
+                snap.login_url = live.browse_to_url;
+                let _ = output.try_send(Message::Snapshot(snap));
             });
         });
         std::future::pending::<()>().await;

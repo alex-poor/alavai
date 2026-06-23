@@ -111,6 +111,26 @@ impl Client {
         Ok(())
     }
 
+    /// Creates a new, empty login profile and switches to it. Follow with
+    /// [`Self::start_login`] to authenticate a new tailnet.
+    pub fn new_profile(&self) -> Result<()> {
+        self.request("PUT", "/localapi/v0/profiles/", &[])?;
+        Ok(())
+    }
+
+    /// Starts interactive login. The daemon then emits a `BrowseToURL` on the
+    /// IPN bus for the user to open and authenticate.
+    pub fn start_login(&self) -> Result<()> {
+        self.request("POST", "/localapi/v0/login-interactive", &[])?;
+        Ok(())
+    }
+
+    /// Deletes (forgets) the profile with the given ID.
+    pub fn delete_profile(&self, id: &str) -> Result<()> {
+        self.request("DELETE", &format!("/localapi/v0/profiles/{id}"), &[])?;
+        Ok(())
+    }
+
     /// Returns the current node preferences (the toggles behind exit nodes,
     /// routes, etc.).
     pub fn prefs(&self) -> Result<Prefs> {
