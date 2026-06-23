@@ -18,7 +18,7 @@ use iced::{Center, Color, Element, Fill, Font, Length, Padding, Size, Subscripti
 use iced::alignment::{Horizontal, Vertical};
 
 use crate::icon::{self, icon};
-use crate::localapi::{Client, Profile};
+use crate::localapi::{self, Client, NetcheckReport, Profile};
 use crate::theme::{self, Palette};
 
 const ADMIN_URL: &str = "https://login.tailscale.com/admin";
@@ -53,6 +53,10 @@ struct GuiSnapshot {
     peers: Vec<PeerView>,
     /// Pending interactive-login URL from the bus (set while adding/logging in).
     login_url: Option<String>,
+    /// False when the local tailscaled daemon couldn't be reached.
+    reachable: bool,
+    /// False when this Linux user isn't the Tailscale operator.
+    operator_ok: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -104,6 +108,11 @@ struct State {
     confirm_remove: Option<String>,
     /// Last login URL we already opened, to avoid reopening on every refresh.
     last_login_url: Option<String>,
+    /// Latest netcheck result, and whether one is running.
+    netcheck: Option<NetcheckReport>,
+    netcheck_running: bool,
+    /// Whether the operator-permission banner has been dismissed this session.
+    operator_dismissed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -132,6 +141,11 @@ enum Message {
     ConfirmRemove(String),
     CancelRemove,
     AddTailnet,
+    // Diagnostics & robustness
+    RunNetcheck,
+    NetcheckDone(Option<NetcheckReport>),
+    DismissOperator,
+    Retry,
 }
 
 // ---------------------------------------------------------------------------
@@ -142,6 +156,12 @@ fn fetch_gui(client: &Client) -> GuiSnapshot {
     let status = client.status().ok();
     let prefs = client.prefs().ok();
     let online = status.as_ref().is_some_and(|s| s.online());
+    let reachable = status.is_some();
+    let operator_ok = match (std::env::var("USER").ok(), prefs.as_ref()) {
+        (Some(user), Some(p)) => p.operator_user == user,
+        // If we can't determine it, don't nag.
+        _ => true,
+    };
 
     let (machine, fqdn, os) = match status.as_ref().and_then(|s| s.self_node.as_ref()) {
         Some(n) => (n.hostname.clone(), n.dns_name.trim_end_matches('.').to_string(), n.os.clone()),
@@ -198,6 +218,8 @@ fn fetch_gui(client: &Client) -> GuiSnapshot {
         advertised_routes: prefs.as_ref().map(|p| p.subnet_routes()).unwrap_or_default(),
         peers,
         login_url: None,
+        reachable,
+        operator_ok,
     }
 }
 
@@ -235,6 +257,9 @@ fn boot() -> (State, Task<Message>) {
             manage: false,
             confirm_remove: None,
             last_login_url: None,
+            netcheck: None,
+            netcheck_running: false,
+            operator_dismissed: false,
         },
         Task::none(),
     )
@@ -401,6 +426,22 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 delayed_clear(),
             ])
         }
+        Message::RunNetcheck => {
+            state.netcheck_running = true;
+            Task::perform(async { localapi::netcheck().ok() }, Message::NetcheckDone)
+        }
+        Message::NetcheckDone(report) => {
+            state.netcheck_running = false;
+            if report.is_some() {
+                state.netcheck = report;
+            }
+            Task::none()
+        }
+        Message::DismissOperator => {
+            state.operator_dismissed = true;
+            Task::none()
+        }
+        Message::Retry => act(|_| {}),
     }
 }
 
@@ -421,7 +462,11 @@ fn view(state: &State) -> Element<'_, Message> {
 
     let body = row![sidebar(state, p), detail(state, p)].height(Fill);
 
-    let mut root = column![header(state, p), body];
+    let mut root = column![header(state, p)];
+    if !state.snap.operator_ok && !state.operator_dismissed {
+        root = root.push(operator_banner(p));
+    }
+    root = root.push(body);
 
     if let Some(t) = &state.toast {
         root = root.push(
@@ -656,6 +701,16 @@ fn sidebar(state: &State, p: Palette) -> Element<'_, Message> {
 }
 
 fn detail(state: &State, p: Palette) -> Element<'_, Message> {
+    if !state.snap.reachable {
+        return container(daemon_down(p))
+            .padding(20)
+            .width(Fill)
+            .height(Fill)
+            .center_x(Fill)
+            .center_y(Fill)
+            .into();
+    }
+
     let content = match &state.selection {
         Selection::ThisMachine => this_machine(state, p),
         Selection::ExitNode => exit_picker(state, p),
@@ -735,9 +790,106 @@ fn this_machine(state: &State, p: Palette) -> Element<'static, Message> {
         }
     }
 
-    column![title, card(ident.into(), p), card(settings.into(), p), card(routes.into(), p)]
-        .spacing(16)
-        .into()
+    column![
+        title,
+        card(ident.into(), p),
+        card(settings.into(), p),
+        card(routes.into(), p),
+        card(netcheck_card(state, p), p),
+    ]
+    .spacing(16)
+    .into()
+}
+
+/// The netcheck (connectivity diagnostics) card.
+fn netcheck_card(state: &State, p: Palette) -> Element<'static, Message> {
+    let run = button(
+        row![
+            icon(icon::REFRESH, 14.0, p.text2),
+            text(if state.netcheck_running { "Running…" } else { "Run" }).size(12),
+        ]
+        .spacing(6)
+        .align_y(Center),
+    )
+    .style(theme::secondary_btn(p))
+    .padding([5, 12])
+    .on_press_maybe((!state.netcheck_running).then_some(Message::RunNetcheck));
+
+    let head = row![
+        icon(icon::ACTIVITY, 16.0, p.text),
+        text("Netcheck").size(13.5).font(SEMI).color(p.text),
+        Space::new().width(Fill),
+        run,
+    ]
+    .spacing(8)
+    .align_y(Center);
+
+    let mut col = column![head].spacing(8);
+
+    if let Some(r) = &state.netcheck {
+        let bool_row = |label: &str, ok: bool, detail: String| -> Element<'static, Message> {
+            let (glyph, color) = if ok { (icon::CHECK, p.online) } else { (icon::CLOSE, p.text3) };
+            row![
+                icon(glyph, 14.0, color),
+                text(label.to_string()).size(12.5).color(p.text2).width(Length::Fixed(120.0)),
+                text(detail).size(12.5).font(MONO).color(p.text),
+            ]
+            .spacing(8)
+            .align_y(Center)
+            .into()
+        };
+        let opt = |b: Option<bool>| match b {
+            Some(true) => "yes",
+            Some(false) => "no",
+            None => "—",
+        };
+        col = col.push(divider(p));
+        col = col.push(bool_row("UDP", r.udp, if r.udp { "working".into() } else { "blocked".into() }));
+        col = col.push(bool_row("IPv4", r.ipv4, r.global_v4.clone()));
+        col = col.push(bool_row("IPv6", r.ipv6, if r.ipv6 { r.global_v6.clone() } else { "not available".into() }));
+        col = col.push(bool_row(
+            "NAT traversal",
+            r.upnp == Some(true) || r.pmp == Some(true) || r.pcp == Some(true),
+            format!("UPnP {} · PMP {} · PCP {}", opt(r.upnp), opt(r.pmp), opt(r.pcp)),
+        ));
+        col = col.push(bool_row(
+            "Captive portal",
+            r.captive_portal != Some(true),
+            if r.captive_portal == Some(true) { "detected".into() } else { "none".into() },
+        ));
+
+        // Preferred relay + nearest latencies.
+        let mut lats: Vec<(&String, &i64)> = r.region_latency.iter().collect();
+        lats.sort_by_key(|(_, ns)| **ns);
+        col = col.push(divider(p));
+        if let Some((region, ns)) = lats.first() {
+            col = col.push(
+                row![
+                    icon(icon::PIN, 14.0, p.accent),
+                    text("Preferred relay").size(12.5).color(p.text2).width(Length::Fixed(120.0)),
+                    text(format!("region {region} · {:.0} ms", **ns as f64 / 1e6)).size(12.5).font(MONO).color(p.text),
+                ]
+                .spacing(8)
+                .align_y(Center),
+            );
+        }
+        for (region, ns) in lats.iter().take(5) {
+            col = col.push(
+                row![
+                    Space::new().width(22),
+                    text(format!("region {region}")).size(12).color(p.text3).width(Length::Fixed(110.0)),
+                    text(format!("{:.0} ms", **ns as f64 / 1e6)).size(12).font(MONO).color(p.text2),
+                ]
+                .spacing(8),
+            );
+        }
+    } else if !state.netcheck_running {
+        col = col.push(text("Run a connectivity check.").size(12.5).color(p.text3));
+    } else {
+        col = col.push(text("Testing connectivity…").size(12.5).color(p.text3));
+    }
+
+    col.into()
 }
 
 fn peer_detail(peer: &PeerView, p: Palette) -> Element<'static, Message> {
@@ -1023,6 +1175,62 @@ fn confirm_block(name: &str, id: &str, p: Palette) -> Element<'static, Message> 
         border: iced::Border { color: p.danger, width: 1.0, radius: 7.0.into() },
         ..Default::default()
     })
+    .into()
+}
+
+/// Amber banner shown when the user isn't the Tailscale operator.
+fn operator_banner(p: Palette) -> Element<'static, Message> {
+    const CMD: &str = "sudo tailscale set --operator=$USER";
+    container(
+        row![
+            icon(icon::WARN, 18.0, p.warn),
+            column![
+                text("alavai can't control Tailscale yet").size(13).font(SEMI).color(p.text),
+                text("Your Linux user isn't the Tailscale operator, so most actions are disabled.")
+                    .size(11.5)
+                    .color(p.text2),
+            ]
+            .spacing(1),
+            Space::new().width(Fill),
+            button(text(CMD).size(11.5).font(MONO).color(p.text))
+                .style(theme::secondary_btn(p))
+                .padding([5, 10])
+                .on_press(Message::Copy(CMD.to_string())),
+            button(text("Recheck").size(12).color(Color::WHITE))
+                .style(theme::primary_btn(p))
+                .padding([5, 12])
+                .on_press(Message::Retry),
+            button(icon(icon::CLOSE, 14.0, p.text2))
+                .style(theme::small_btn(p))
+                .padding([5, 7])
+                .on_press(Message::DismissOperator),
+        ]
+        .spacing(10)
+        .align_y(Center),
+    )
+    .padding([8, 16])
+    .width(Fill)
+    .style(move |_| container::Style {
+        background: Some(with_alpha(p.warn, 0.12).into()),
+        border: iced::Border { color: with_alpha(p.warn, 0.4), width: 1.0, radius: 0.0.into() },
+        ..Default::default()
+    })
+    .into()
+}
+
+/// Centered state shown when the local daemon can't be reached.
+fn daemon_down(p: Palette) -> Element<'static, Message> {
+    column![
+        icon(icon::WIFI_OFF, 40.0, p.danger),
+        text("Can't reach Tailscale").size(18).font(SEMI).color(p.text),
+        text("The tailscaled service doesn't seem to be running.").size(13).color(p.text2),
+        button(text("Retry").size(13).color(Color::WHITE))
+            .style(theme::primary_btn(p))
+            .padding([7, 16])
+            .on_press(Message::Retry),
+    ]
+    .spacing(12)
+    .align_x(Center)
     .into()
 }
 

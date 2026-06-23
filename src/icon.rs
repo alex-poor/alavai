@@ -32,6 +32,9 @@ icons! {
     PIN => "map-pin.svg",
     POWER => "power.svg",
     REFRESH => "refresh-cw.svg",
+    WARN => "triangle-alert.svg",
+    ACTIVITY => "activity.svg",
+    WIFI_OFF => "wifi-off.svg",
 }
 
 /// Builds a square, single-colour icon at the given pixel size.
