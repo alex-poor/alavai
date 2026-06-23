@@ -163,6 +163,19 @@ impl Client {
         self.edit_prefs(json!({"AdvertiseRoutes": routes, "AdvertiseRoutesSet": true}))
     }
 
+    /// Returns the stable node ID of the daemon's suggested "best" exit node
+    /// (for the picker's "Automatic" option). Empty if none is suggested.
+    pub fn suggest_exit_node(&self) -> Result<String> {
+        #[derive(Deserialize)]
+        struct Resp {
+            #[serde(rename = "ID", default)]
+            id: String,
+        }
+        let body = self.get("/localapi/v0/suggest-exit-node")?;
+        let r: Resp = serde_json::from_slice(&body).context("parse exit-node suggestion")?;
+        Ok(r.id)
+    }
+
     /// Sets the advertised subnet routes, preserving exit-node advertisement.
     pub fn set_advertise_routes(&self, subnets: &[String]) -> Result<()> {
         let prefs = self.prefs()?;

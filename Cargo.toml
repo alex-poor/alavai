@@ -31,6 +31,7 @@ ksni = { version = "0.3.5", default-features = false, features = ["blocking", "a
 # ourselves instead.
 iced = { version = "0.14.0", default-features = false, features = [
     "tiny-skia",
+    "svg",
     "crisp",
     "web-colors",
     "thread-pool",

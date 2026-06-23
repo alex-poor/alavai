@@ -14,11 +14,19 @@ use iced::futures::Stream;
 use iced::widget::{button, column, container, row, scrollable, text, text_input, toggler, Space};
 use iced::{Center, Color, Element, Fill, Font, Length, Size, Subscription, Task};
 
+use crate::icon::{self, icon};
 use crate::localapi::{Client, Profile};
 use crate::theme::{self, Palette};
 
 const ADMIN_URL: &str = "https://login.tailscale.com/admin";
 const MONO: Font = Font::MONOSPACE;
+/// System sans at semibold weight (for titles / names) — no font bundled.
+const SEMI: Font = Font {
+    family: iced::font::Family::SansSerif,
+    weight: iced::font::Weight::Semibold,
+    stretch: iced::font::Stretch::Normal,
+    style: iced::font::Style::Normal,
+};
 const SIDEBAR_W: f32 = 248.0;
 
 // ---------------------------------------------------------------------------
@@ -84,6 +92,7 @@ impl fmt::Display for TailnetChoice {
 enum Selection {
     ThisMachine,
     Peer(String),
+    ExitNode,
 }
 
 struct State {
@@ -107,6 +116,7 @@ enum Message {
     SetAdvertiseExit(bool),
     SetAllowLan(bool),
     UseExitNode(String),
+    UseExitNodeAuto,
     ClearExitNode,
     Copy(String),
     ToggleTheme,
@@ -281,6 +291,16 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 let _ = c.set_exit_node(&id);
             })
         }
+        Message::UseExitNodeAuto => {
+            state.busy = true;
+            act(|c| {
+                if let Ok(id) = c.suggest_exit_node() {
+                    if !id.is_empty() {
+                        let _ = c.set_exit_node(&id);
+                    }
+                }
+            })
+        }
         Message::ClearExitNode => {
             state.busy = true;
             act(|c| {
@@ -353,7 +373,7 @@ fn header(state: &State, p: Palette) -> Element<'_, Message> {
         .center_x(26)
         .center_y(26)
         .style(theme::avatar(p.accent));
-    let brand = row![mark, text("alavai").size(15).color(p.text)]
+    let brand = row![mark, text("alavai").size(15).font(SEMI).color(p.text)]
         .spacing(8)
         .align_y(Center);
 
@@ -415,19 +435,26 @@ fn header(state: &State, p: Palette) -> Element<'_, Message> {
 fn sidebar(state: &State, p: Palette) -> Element<'_, Message> {
     let snap = &state.snap;
 
-    let filter = text_input("Filter peers", &state.filter)
-        .on_input(Message::Filter)
-        .size(13)
-        .padding([7, 10])
-        .style(theme::input(p));
+    let filter = row![
+        icon(icon::SEARCH, 15.0, p.text3),
+        text_input("Filter peers", &state.filter)
+            .on_input(Message::Filter)
+            .size(13)
+            .padding([7, 8])
+            .style(theme::input(p)),
+    ]
+    .spacing(6)
+    .align_y(Center);
 
     // This machine pinned row.
     let this_selected = state.selection == Selection::ThisMachine;
     let this_row = button(
         row![
+            icon(icon::MONITOR, 18.0, p.text2),
             column![
                 text(if snap.machine.is_empty() { "This machine".into() } else { snap.machine.clone() })
                     .size(13.5)
+                    .font(SEMI)
                     .color(p.text),
                 text("This machine").size(11).color(p.text3),
             ]
@@ -435,6 +462,7 @@ fn sidebar(state: &State, p: Palette) -> Element<'_, Message> {
             Space::new().width(Fill),
             dot(if snap.online { p.online } else { p.offline }, snap.online),
         ]
+        .spacing(9)
         .align_y(Center),
     )
     .width(Fill)
@@ -463,7 +491,7 @@ fn sidebar(state: &State, p: Palette) -> Element<'_, Message> {
             button(
                 row![
                     dot(if peer.online { p.online } else { p.offline }, peer.online),
-                    text(peer.name.clone()).size(13).color(name_color),
+                    text(peer.name.clone()).size(13).font(SEMI).color(name_color),
                     Space::new().width(Fill),
                     trailing,
                 ]
@@ -480,9 +508,24 @@ fn sidebar(state: &State, p: Palette) -> Element<'_, Message> {
         peer_col = peer_col.push(text("No matching peers.").size(12).color(p.text3));
     }
 
+    let exit_active = snap.peers.iter().any(|x| x.exit_node);
     let footer = row![
-        button(text("Admin console").size(12)).style(theme::small_btn(p)).padding([6, 10]).on_press(Message::OpenAdmin),
-    ];
+        button(
+            row![icon(icon::GLOBE, 15.0, if exit_active { p.exit } else { p.text2 }), text("Exit node").size(12)]
+                .spacing(6)
+                .align_y(Center)
+        )
+        .style(theme::small_btn(p))
+        .padding([6, 10])
+        .on_press(Message::Select(Selection::ExitNode)),
+        Space::new().width(Fill),
+        button(icon(icon::EXTERNAL, 15.0, p.text2))
+            .style(theme::small_btn(p))
+            .padding([6, 8])
+            .on_press(Message::OpenAdmin),
+    ]
+    .spacing(6)
+    .align_y(Center);
 
     container(
         column![
@@ -504,6 +547,7 @@ fn sidebar(state: &State, p: Palette) -> Element<'_, Message> {
 fn detail(state: &State, p: Palette) -> Element<'_, Message> {
     let content = match &state.selection {
         Selection::ThisMachine => this_machine(state, p),
+        Selection::ExitNode => exit_picker(state, p),
         Selection::Peer(id) => match state.snap.peers.iter().find(|x| &x.id == id) {
             Some(peer) => peer_detail(peer, p),
             None => text("Peer not found.").size(14).color(p.text2).into(),
@@ -524,9 +568,13 @@ fn this_machine(state: &State, p: Palette) -> Element<'static, Message> {
     } else {
         badge_text(snap.os.clone(), p.text2, p.raised)
     };
-    let title = row![text("This machine").size(20).color(p.text), os_chip]
-        .spacing(10)
-        .align_y(Center);
+    let title = row![
+        icon(icon::MONITOR, 22.0, p.text),
+        text("This machine").size(20).font(SEMI).color(p.text),
+        os_chip
+    ]
+    .spacing(10)
+    .align_y(Center);
 
     // Identity card.
     let mut ident = column![status_line(snap.online, p)].spacing(2);
@@ -583,7 +631,8 @@ fn this_machine(state: &State, p: Palette) -> Element<'static, Message> {
 
 fn peer_detail(peer: &PeerView, p: Palette) -> Element<'static, Message> {
     let mut title = row![
-        text(peer.name.clone()).size(20).color(p.text),
+        icon(icon::LAPTOP, 22.0, p.text),
+        text(peer.name.clone()).size(20).font(SEMI).color(p.text),
         dot(if peer.online { p.online } else { p.offline }, peer.online),
     ]
     .spacing(10)
@@ -657,6 +706,95 @@ fn peer_detail(peer: &PeerView, p: Palette) -> Element<'static, Message> {
     column![title, sub, actions, card(info.into(), p)].spacing(12).into()
 }
 
+fn exit_picker(state: &State, p: Palette) -> Element<'static, Message> {
+    let snap = &state.snap;
+    let active = snap.peers.iter().any(|x| x.exit_node);
+
+    let title = row![icon(icon::GLOBE, 22.0, p.text), text("Exit node").size(20).font(SEMI).color(p.text)]
+        .spacing(10)
+        .align_y(Center);
+
+    // None / Automatic options.
+    let mut options = column![
+        picker_row("None", "Use your own internet connection", !active, p, Message::ClearExitNode),
+        picker_row("Automatic", "Pick the best available node", false, p, Message::UseExitNodeAuto),
+    ]
+    .spacing(2);
+
+    // Eligible peers.
+    let mut eligible: Vec<&PeerView> = snap.peers.iter().filter(|x| x.exit_node_option).collect();
+    eligible.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    let mut peer_rows = column![caps("YOUR PEERS".into(), p)].spacing(2);
+    if eligible.is_empty() {
+        peer_rows = peer_rows.push(text("No exit nodes available on this tailnet.").size(12.5).color(p.text3));
+    } else {
+        for peer in eligible {
+            let sub = if peer.relay.is_empty() {
+                if peer.online { "online".to_string() } else { "offline".to_string() }
+            } else {
+                format!("DERP {}", peer.relay)
+            };
+            peer_rows = peer_rows.push(picker_row(
+                &peer.name,
+                &sub,
+                peer.exit_node,
+                p,
+                Message::UseExitNode(peer.id.clone()),
+            ));
+        }
+    }
+
+    // Allow LAN access toggle.
+    let lan = card(
+        setting_toggle(
+            "Allow LAN access",
+            "Keep reaching your local printer and NAS while an exit node is on.",
+            snap.allow_lan,
+            Message::SetAllowLan,
+            p,
+        ),
+        p,
+    );
+
+    options = options.push(Space::new().height(8));
+    column![title, card(options.into(), p), card(peer_rows.into(), p), lan]
+        .spacing(16)
+        .into()
+}
+
+/// A selectable row used in the exit-node picker.
+fn picker_row(
+    title: &str,
+    sub: &str,
+    selected: bool,
+    p: Palette,
+    msg: Message,
+) -> Element<'static, Message> {
+    let trailing: Element<Message> = if selected {
+        icon(icon::CHECK, 18.0, p.accent)
+    } else {
+        Space::new().width(18).into()
+    };
+    button(
+        row![
+            column![
+                text(title.to_string()).size(13.5).font(SEMI).color(p.text),
+                text(sub.to_string()).size(11.5).color(p.text3),
+            ]
+            .spacing(1),
+            Space::new().width(Fill),
+            trailing,
+        ]
+        .spacing(10)
+        .align_y(Center),
+    )
+    .width(Fill)
+    .padding([8, 10])
+    .style(theme::row_btn(p, selected))
+    .on_press(msg)
+    .into()
+}
+
 // ---------------------------------------------------------------------------
 // Small view helpers
 // ---------------------------------------------------------------------------
@@ -711,9 +849,9 @@ fn kv_row(label: &str, value: String, value_color: Color, p: Palette) -> Element
         text(label.to_string()).size(12).color(p.text3).width(Length::Fixed(100.0)),
         text(value.clone()).size(12.5).font(MONO).color(value_color),
         Space::new().width(Fill),
-        button(text("Copy").size(11).color(p.text2))
+        button(icon(icon::COPY, 14.0, p.text2))
             .style(theme::small_btn(p))
-            .padding([3, 8])
+            .padding([5, 7])
             .on_press(Message::Copy(value)),
     ]
     .spacing(8)

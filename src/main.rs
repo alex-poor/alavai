@@ -4,6 +4,7 @@
 //! (`ksni`) and GUI (`iced`) land in later phases — see docs/PLAN.md.
 
 mod gui;
+mod icon;
 mod localapi;
 mod theme;
 mod tray;
