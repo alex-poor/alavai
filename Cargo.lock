@@ -45,6 +45,7 @@ dependencies = [
  "clap",
  "iced",
  "ksni",
+ "resvg",
  "serde",
  "serde_json",
 ]

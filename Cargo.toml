@@ -23,6 +23,9 @@ clap = { version = "4", features = ["derive"] }
 # matters because iced_winit also opens a session-bus connection — under tokio
 # mode that path panics; under async-io it just works. Also drops tokio entirely.
 ksni = { version = "0.3.5", default-features = false, features = ["blocking", "async-io"] }
+# Already in the tree via iced's tiny-skia renderer; used directly to rasterize
+# the brand mesh icons for the tray (ARGB) and the window icon (RGBA).
+resvg = { version = "0.45", default-features = false }
 # iced with the tiny-skia *software* renderer (no wgpu/GPU dependency) for a
 # smaller binary that runs cleanly on any distro, VM, or GPU-less setup.
 # `linux-theme-detection` is intentionally omitted: it makes iced call D-Bus via

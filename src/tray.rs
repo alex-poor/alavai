@@ -19,8 +19,9 @@ use std::time::Duration;
 use anyhow::{Result, anyhow};
 use ksni::blocking::{Handle, TrayMethods};
 use ksni::menu::{RadioGroup, RadioItem, StandardItem};
-use ksni::{Category, MenuItem, Status as IconStatus, ToolTip, Tray};
+use ksni::{Category, Icon, MenuItem, Status as IconStatus, ToolTip, Tray};
 
+use crate::icon;
 use crate::localapi::{Client, LiveState, Profile};
 
 /// How often to re-poll the profile list. Profiles are not delivered on the IPN
@@ -134,15 +135,26 @@ impl Tray for AppTray {
     }
 
     fn icon_name(&self) -> String {
-        // Themed names; Phase 5 embeds PNG fallbacks via `icon_data` for
-        // minimal WMs that ship no icon theme.
-        if !self.snap.online {
-            "network-offline-symbolic".into()
+        // Empty so SNI hosts use our rendered brand mesh in `icon_pixmap` — a
+        // non-empty IconName takes precedence over IconPixmap per the spec.
+        String::new()
+    }
+
+    fn icon_pixmap(&self) -> Vec<Icon> {
+        let svg = if !self.snap.online {
+            icon::TRAY_DISCONNECTED
         } else if self.snap.exit_node_active {
-            "network-vpn-acquiring-symbolic".into()
+            icon::TRAY_EXIT
         } else {
-            "network-vpn-symbolic".into()
-        }
+            icon::TRAY_CONNECTED
+        };
+        // Provide a couple of sizes so the panel can pick the crispest.
+        [22u32, 44]
+            .iter()
+            .filter_map(|&size| {
+                icon::render_argb(svg, size).map(|(width, height, data)| Icon { width, height, data })
+            })
+            .collect()
     }
 
     fn tool_tip(&self) -> ToolTip {

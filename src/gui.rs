@@ -1388,11 +1388,18 @@ fn watch_stream() -> impl Stream<Item = Message> {
 
 /// Runs the GUI. Blocks until the window is closed.
 pub fn run() -> Result<()> {
+    let window_icon = icon::render_rgba(icon::TRAY_CONNECTED, 64)
+        .and_then(|(w, h, rgba)| iced::window::icon::from_rgba(rgba, w, h).ok());
+
     iced::application(boot, update, view)
         .title("alavai")
         .subscription(subscription)
         .theme(theme)
-        .window_size(Size::new(920.0, 640.0))
+        .window(iced::window::Settings {
+            size: Size::new(920.0, 640.0),
+            icon: window_icon,
+            ..Default::default()
+        })
         .run()
         .map_err(|e| anyhow::anyhow!("run GUI: {e}"))
 }
