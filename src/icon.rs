@@ -46,6 +46,11 @@ pub fn icon<'a, Message: 'a>(bytes: &'static [u8], size: f32, color: Color) -> E
         .into()
 }
 
+/// Renders an SVG at its own colours (no tint) — used for the brand mark.
+pub fn raw<'a, Message: 'a>(bytes: &'static [u8], size: f32) -> Element<'a, Message> {
+    svg(svg::Handle::from_memory(bytes)).width(size).height(size).into()
+}
+
 // --- Brand mesh icons (rasterized for the tray + window) ---
 
 pub const TRAY_CONNECTED: &[u8] = include_bytes!("../assets/icons/tray-connected.svg");

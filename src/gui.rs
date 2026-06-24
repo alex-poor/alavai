@@ -57,6 +57,8 @@ struct GuiSnapshot {
     reachable: bool,
     /// False when this Linux user isn't the Tailscale operator.
     operator_ok: bool,
+    /// True when the daemon is reachable but no tailnet is logged in.
+    needs_login: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -113,6 +115,10 @@ struct State {
     netcheck_running: bool,
     /// Whether the operator-permission banner has been dismissed this session.
     operator_dismissed: bool,
+    /// Draft CIDR in the advertised-routes "add" field.
+    route_input: String,
+    /// In narrow layout, whether a detail view is pushed over the list.
+    drilled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -141,11 +147,18 @@ enum Message {
     ConfirmRemove(String),
     CancelRemove,
     AddTailnet,
+    StartLogin,
     // Diagnostics & robustness
     RunNetcheck,
     NetcheckDone(Option<NetcheckReport>),
     DismissOperator,
     Retry,
+    // Advertised routes editor
+    RouteInput(String),
+    AddRoute,
+    RemoveRoute(String),
+    // Narrow-layout navigation
+    Back,
 }
 
 // ---------------------------------------------------------------------------
@@ -220,6 +233,7 @@ fn fetch_gui(client: &Client) -> GuiSnapshot {
         login_url: None,
         reachable,
         operator_ok,
+        needs_login: status.as_ref().is_some_and(|s| s.backend_state == "NeedsLogin"),
     }
 }
 
@@ -260,6 +274,8 @@ fn boot() -> (State, Task<Message>) {
             netcheck: None,
             netcheck_running: false,
             operator_dismissed: false,
+            route_input: String::new(),
+            drilled: false,
         },
         Task::none(),
     )
@@ -294,6 +310,11 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::Select(sel) => {
             state.selection = sel;
+            state.drilled = true; // narrow layout: push the detail view
+            Task::none()
+        }
+        Message::Back => {
+            state.drilled = false;
             Task::none()
         }
         Message::Filter(f) => {
@@ -412,6 +433,16 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 let _ = c.delete_profile(&id);
             })
         }
+        Message::StartLogin => {
+            state.busy = true;
+            state.toast = Some("Opening your browser to sign in…".into());
+            Task::batch([
+                act(|c| {
+                    let _ = c.start_login();
+                }),
+                delayed_clear(),
+            ])
+        }
         Message::AddTailnet => {
             state.switcher_open = false;
             state.manage = false;
@@ -442,7 +473,52 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::Retry => act(|_| {}),
+        Message::RouteInput(s) => {
+            state.route_input = s;
+            Task::none()
+        }
+        Message::AddRoute => {
+            let cidr = state.route_input.trim().to_string();
+            if !is_valid_cidr(&cidr) {
+                state.toast = Some(format!("Invalid CIDR: {cidr}"));
+                return delayed_clear();
+            }
+            let mut routes = state.snap.advertised_routes.clone();
+            if !routes.contains(&cidr) {
+                routes.push(cidr);
+            }
+            state.route_input.clear();
+            state.busy = true;
+            act(move |c| {
+                let _ = c.set_advertise_routes(&routes);
+            })
+        }
+        Message::RemoveRoute(cidr) => {
+            let routes: Vec<String> = state
+                .snap
+                .advertised_routes
+                .iter()
+                .filter(|r| **r != cidr)
+                .cloned()
+                .collect();
+            state.busy = true;
+            act(move |c| {
+                let _ = c.set_advertise_routes(&routes);
+            })
+        }
     }
+}
+
+/// Light validation of a CIDR prefix (e.g. `192.168.1.0/24`).
+fn is_valid_cidr(s: &str) -> bool {
+    let Some((addr, bits)) = s.split_once('/') else {
+        return false;
+    };
+    let Ok(ip) = addr.parse::<std::net::IpAddr>() else {
+        return false;
+    };
+    let max = if ip.is_ipv6() { 128 } else { 32 };
+    bits.parse::<u8>().is_ok_and(|b| b <= max)
 }
 
 fn theme(state: &State) -> iced::Theme {
@@ -460,23 +536,22 @@ fn palette(state: &State) -> Palette {
 fn view(state: &State) -> Element<'_, Message> {
     let p = palette(state);
 
-    let body = row![sidebar(state, p), detail(state, p)].height(Fill);
-
-    let mut root = column![header(state, p)];
-    if !state.snap.operator_ok && !state.operator_dismissed {
-        root = root.push(operator_banner(p));
-    }
-    root = root.push(body);
-
-    if let Some(t) = &state.toast {
-        root = root.push(
-            container(text(t.clone()).size(13).color(p.text))
-                .padding([8, 14])
-                .style(move |_| theme::chip(p)),
-        );
+    // Logged-out: a full-window welcome (no header/sidebar — there's no tailnet).
+    if state.snap.reachable && state.snap.needs_login {
+        return container(welcome(p))
+            .width(Fill)
+            .height(Fill)
+            .center_x(Fill)
+            .center_y(Fill)
+            .style(move |_| theme::window(p))
+            .into();
     }
 
-    let base = container(root)
+    // Layout adapts to the available width (sidebar+detail when wide; a single
+    // column with drill-in navigation when narrow / tiling).
+    let content = iced::widget::responsive(move |size| layout(state, p, size.width < 560.0));
+
+    let base = container(content)
         .width(Fill)
         .height(Fill)
         .style(move |_| theme::window(p));
@@ -508,18 +583,68 @@ fn view(state: &State) -> Element<'_, Message> {
     }
 }
 
-fn header(state: &State, p: Palette) -> Element<'_, Message> {
+/// Builds the header + body for a given width regime.
+fn layout(state: &State, p: Palette, narrow: bool) -> Element<'_, Message> {
+    let mut root = column![header(state, p, narrow)];
+    if !state.snap.operator_ok && !state.operator_dismissed {
+        root = root.push(operator_banner(p));
+    }
+
+    let body: Element<Message> = if narrow {
+        if state.drilled {
+            column![back_bar(p), detail(state, p)].height(Fill).into()
+        } else {
+            sidebar(state, p, true)
+        }
+    } else {
+        row![sidebar(state, p, false), detail(state, p)]
+            .height(Fill)
+            .into()
+    };
+    root = root.push(body);
+
+    if let Some(t) = &state.toast {
+        root = root.push(
+            container(text(t.clone()).size(13).color(p.text))
+                .padding([8, 14])
+                .style(move |_| theme::chip(p)),
+        );
+    }
+    root.into()
+}
+
+/// Back bar shown above a pushed detail view in the narrow layout.
+fn back_bar(p: Palette) -> Element<'static, Message> {
+    container(
+        button(
+            row![icon(icon::CHEVRON, 14.0, p.accent), text("Back").size(13).color(p.accent)]
+                .spacing(4)
+                .align_y(Center),
+        )
+        .style(theme::small_btn(p))
+        .padding([5, 10])
+        .on_press(Message::Back),
+    )
+    .padding([8, 12])
+    .into()
+}
+
+fn header(state: &State, p: Palette, narrow: bool) -> Element<'_, Message> {
     let snap = &state.snap;
 
-    let mark = container(text("a").size(15).color(Color::WHITE))
+    let mark = container(icon::raw(icon::TRAY_CONNECTED, 22.0))
         .width(26)
         .height(26)
         .center_x(26)
-        .center_y(26)
-        .style(theme::avatar(p.accent));
-    let brand = row![mark, text("alavai").size(15).font(SEMI).color(p.text)]
-        .spacing(8)
-        .align_y(Center);
+        .center_y(26);
+    let brand: Element<Message> = if narrow {
+        mark.into()
+    } else {
+        row![mark, text("alavai").size(15).font(SEMI).color(p.text)]
+            .spacing(8)
+            .align_y(Center)
+            .into()
+    };
 
     // Tailnet switcher chip → opens the popover.
     let cur_idx = snap.tailnets.iter().position(|t| t.id == snap.current_id).unwrap_or(0);
@@ -527,14 +652,14 @@ fn header(state: &State, p: Palette) -> Element<'_, Message> {
         Some(t) => (t.label(), t.user.login_name.clone()),
         None => ("No tailnet".to_string(), String::new()),
     };
+    let mut chip_text = column![text(cur_name.clone()).size(13).font(SEMI).color(p.text)].spacing(0);
+    if !narrow && !cur_email.is_empty() {
+        chip_text = chip_text.push(text(cur_email).size(10.5).font(MONO).color(p.text3));
+    }
     let switcher = button(
         row![
             avatar_tile(&cur_name, theme::account_color(p, cur_idx), 24.0),
-            column![
-                text(cur_name).size(13).font(SEMI).color(p.text),
-                text(cur_email).size(10.5).font(MONO).color(p.text3),
-            ]
-            .spacing(0),
+            chip_text,
             icon(icon::CHEVRON, 14.0, p.text3),
         ]
         .spacing(8)
@@ -552,13 +677,13 @@ fn header(state: &State, p: Palette) -> Element<'_, Message> {
     } else {
         ("Disconnected", p.text2, p.raised)
     };
-    let pill = container(
-        row![dot(status_color, snap.online || state.switching), text(status_label).size(12.5).color(status_color)]
-            .spacing(7)
-            .align_y(Center),
-    )
-    .padding([5, 10])
-    .style(theme::pill(tint, 8.0));
+    let mut pill_row = row![dot(status_color, snap.online || state.switching)]
+        .spacing(7)
+        .align_y(Center);
+    if !narrow {
+        pill_row = pill_row.push(text(status_label).size(12.5).color(status_color));
+    }
+    let pill = container(pill_row).padding([5, 10]).style(theme::pill(tint, 8.0));
 
     // Connect / disconnect.
     let conn_label = if snap.online { "Disconnect" } else { "Connect" };
@@ -571,24 +696,27 @@ fn header(state: &State, p: Palette) -> Element<'_, Message> {
     .padding([7, 14])
     .on_press_maybe(conn_msg);
 
-    let theme_toggle = button(text(if state.dark { "☀" } else { "☾" }).size(14))
-        .padding([6, 10])
-        .style(theme::small_btn(p))
-        .on_press(Message::ToggleTheme);
+    let mut bar = row![brand, switcher, Space::new().width(Fill), pill, conn]
+        .spacing(if narrow { 8 } else { 12 })
+        .align_y(Center)
+        .padding([0, if narrow { 10 } else { 16 }]);
+    if !narrow {
+        bar = bar.push(
+            button(text(if state.dark { "☀" } else { "☾" }).size(14))
+                .padding([6, 10])
+                .style(theme::small_btn(p))
+                .on_press(Message::ToggleTheme),
+        );
+    }
 
-    container(
-        row![brand, switcher, Space::new().width(Fill), pill, conn, theme_toggle]
-            .spacing(12)
-            .align_y(Center)
-            .padding([0, 16]),
-    )
-    .height(56)
-    .width(Fill)
-    .style(move |_| theme::header(p))
-    .into()
+    container(bar)
+        .height(56)
+        .width(Fill)
+        .style(move |_| theme::header(p))
+        .into()
 }
 
-fn sidebar(state: &State, p: Palette) -> Element<'_, Message> {
+fn sidebar(state: &State, p: Palette, full: bool) -> Element<'_, Message> {
     let snap = &state.snap;
 
     let filter = row![
@@ -694,7 +822,7 @@ fn sidebar(state: &State, p: Palette) -> Element<'_, Message> {
         .spacing(10)
         .padding(10),
     )
-    .width(SIDEBAR_W)
+    .width(if full { Fill } else { Length::Fixed(SIDEBAR_W) })
     .height(Fill)
     .style(move |_| theme::sidebar(p))
     .into()
@@ -780,15 +908,46 @@ fn this_machine(state: &State, p: Palette) -> Element<'static, Message> {
     ]
     .spacing(10);
 
-    // Advertised routes card.
+    // Advertised routes card (editable).
     let mut routes = column![caps("ADVERTISED ROUTES".into(), p)].spacing(6);
     if snap.advertised_routes.is_empty() {
         routes = routes.push(text("None advertised.").size(13).color(p.text3));
     } else {
         for r in &snap.advertised_routes {
-            routes = routes.push(text(r.clone()).size(13).font(MONO).color(p.text));
+            let r = r.clone();
+            routes = routes.push(
+                row![
+                    text(r.clone()).size(13).font(MONO).color(p.text),
+                    Space::new().width(Fill),
+                    button(icon(icon::CLOSE, 13.0, p.text2))
+                        .style(theme::small_btn(p))
+                        .padding([4, 6])
+                        .on_press(Message::RemoveRoute(r)),
+                ]
+                .align_y(Center),
+            );
         }
     }
+    routes = routes.push(
+        row![
+            text_input("Add route, e.g. 192.168.1.0/24", &state.route_input)
+                .on_input(Message::RouteInput)
+                .on_submit(Message::AddRoute)
+                .size(12.5)
+                .padding([6, 9])
+                .style(theme::input(p)),
+            button(
+                row![icon(icon::PLUS, 13.0, p.accent), text("Add").size(12).color(p.accent)]
+                    .spacing(5)
+                    .align_y(Center)
+            )
+            .style(theme::secondary_btn(p))
+            .padding([6, 12])
+            .on_press(Message::AddRoute),
+        ]
+        .spacing(8)
+        .align_y(Center),
+    );
 
     column![
         title,
@@ -1218,6 +1377,31 @@ fn operator_banner(p: Palette) -> Element<'static, Message> {
     .into()
 }
 
+/// Full-window welcome shown when no tailnet is logged in.
+fn welcome(p: Palette) -> Element<'static, Message> {
+    column![
+        icon::raw(icon::TRAY_CONNECTED, 56.0),
+        text("Welcome to alavai").size(22).font(SEMI).color(p.text),
+        text("Log in to a Tailscale account to see your devices and start switching tailnets.")
+            .size(13)
+            .color(p.text2),
+        Space::new().height(4),
+        button(
+            row![icon(icon::GLOBE, 16.0, Color::WHITE), text("Log in to Tailscale").size(13.5).color(Color::WHITE)]
+                .spacing(8)
+                .align_y(Center)
+        )
+        .style(theme::primary_btn(p))
+        .padding([9, 18])
+        .on_press(Message::StartLogin),
+        text("or connect a custom control server").size(11.5).color(p.text3),
+    ]
+    .spacing(10)
+    .align_x(Center)
+    .width(Length::Fixed(380.0))
+    .into()
+}
+
 /// Centered state shown when the local daemon can't be reached.
 fn daemon_down(p: Palette) -> Element<'static, Message> {
     column![
@@ -1397,6 +1581,7 @@ pub fn run() -> Result<()> {
         .theme(theme)
         .window(iced::window::Settings {
             size: Size::new(920.0, 640.0),
+            min_size: Some(Size::new(340.0, 480.0)),
             icon: window_icon,
             ..Default::default()
         })
