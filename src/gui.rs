@@ -101,6 +101,11 @@ struct State {
     filter: String,
     busy: bool,
     switching: bool,
+    /// Label of the tailnet being switched to (shown during the transition).
+    switching_to: Option<String>,
+    /// Profile id being switched to; the transition ends when the daemon's
+    /// current profile actually becomes this (or login is needed / it times out).
+    switching_target: Option<String>,
     toast: Option<String>,
     /// Whether the tailnet-switcher popover is open.
     switcher_open: bool,
@@ -162,6 +167,10 @@ enum Message {
     RemoveRoute(String),
     // Narrow-layout navigation
     Back,
+    /// Safety net to end a stuck switching transition.
+    ClearSwitching,
+    /// A fire-and-forget action completed; nothing to do.
+    Noop,
 }
 
 // ---------------------------------------------------------------------------
@@ -297,6 +306,21 @@ where
     )
 }
 
+/// Runs a blocking mutation fire-and-forget — relies on the bus to deliver the
+/// resulting state (used where a full refetch would catch a transient state).
+fn fire<F>(f: F) -> Task<Message>
+where
+    F: FnOnce(&Client) + Send + 'static,
+{
+    Task::perform(
+        async move {
+            let client = Client::default();
+            f(&client);
+        },
+        |()| Message::Noop,
+    )
+}
+
 // ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
@@ -311,6 +335,8 @@ fn boot() -> (State, Task<Message>) {
             filter: String::new(),
             busy: false,
             switching: false,
+            switching_to: None,
+            switching_target: None,
             toast: None,
             switcher_open: false,
             manage: false,
@@ -344,7 +370,17 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 .cloned();
             state.snap = snap;
             state.busy = false;
-            state.switching = false;
+            // End the switching transition only once it's genuinely settled:
+            // the daemon's current profile is now the target and connected, or
+            // the new tailnet needs login. Transient offline states in between
+            // keep the "Switching…" screen instead of flashing disconnected.
+            let arrived = state.snap.online
+                && state.switching_target.as_deref() == Some(state.snap.current_id.as_str());
+            if arrived || state.snap.needs_login {
+                state.switching = false;
+                state.switching_to = None;
+                state.switching_target = None;
+            }
             if let Some(url) = new_login {
                 state.last_login_url = Some(url.clone());
                 let _ = ProcCommand::new("xdg-open").arg(&url).spawn();
@@ -363,7 +399,14 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 .cloned();
             state.snap.apply_live(&live);
             state.busy = false;
-            state.switching = false;
+            // Live deltas don't refresh the active profile, so the only switch
+            // outcome they can confirm is "needs login". Arrival on the target
+            // is confirmed by a Snapshot (above). Otherwise hold the transition.
+            if state.snap.needs_login {
+                state.switching = false;
+                state.switching_to = None;
+                state.switching_target = None;
+            }
             if let Some(url) = new_login {
                 state.last_login_url = Some(url.clone());
                 let _ = ProcCommand::new("xdg-open").arg(&url).spawn();
@@ -381,6 +424,14 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             state.drilled = false;
             Task::none()
         }
+        Message::ClearSwitching => {
+            state.switching = false;
+            state.switching_to = None;
+            state.switching_target = None;
+            state.busy = false;
+            Task::none()
+        }
+        Message::Noop => Task::none(),
         Message::Filter(f) => {
             state.filter = f;
             Task::none()
@@ -391,11 +442,25 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             if id == state.snap.current_id {
                 return Task::none();
             }
+            state.switching_to = state
+                .snap
+                .tailnets
+                .iter()
+                .find(|t| t.id == id)
+                .map(|t| t.label());
+            state.switching_target = Some(id.clone());
+            // Optimistically show the target in the header while we transition.
+            state.snap.current_id = id.clone();
             state.busy = true;
             state.switching = true;
-            act(move |c| {
-                let _ = c.switch_profile(&id);
-            })
+            // Fire-and-forget the switch and rely on the bus to deliver the
+            // settled state; a timeout clears the transition if it never does.
+            Task::batch([
+                fire(move |c| {
+                    let _ = c.switch_profile(&id);
+                }),
+                switching_timeout(),
+            ])
         }
         Message::ToggleConnection => {
             let online = state.snap.online;
@@ -607,7 +672,8 @@ fn view(state: &State) -> Element<'_, Message> {
     let p = palette(state);
 
     // Logged-out: a full-window welcome (no header/sidebar — there's no tailnet).
-    if state.snap.reachable && state.snap.needs_login {
+    // Suppressed mid-switch so the transition shows a "Switching…" body instead.
+    if !state.switching && state.snap.reachable && state.snap.needs_login {
         return container(welcome(p))
             .width(Fill)
             .height(Fill)
@@ -666,7 +732,11 @@ fn layout(state: &State, p: Palette, narrow: bool) -> Element<'_, Message> {
         root = root.push(operator_banner(p));
     }
 
-    let body: Element<Message> = if narrow {
+    let body: Element<Message> = if state.switching {
+        // Transitional state: the tailnet is being torn down and brought back
+        // up; show one calm "Switching…" body instead of the disconnected screen.
+        switching_body(state, p)
+    } else if narrow {
         if state.drilled {
             column![back_bar(p), detail(state, p)].height(Fill).into()
         } else {
@@ -1669,6 +1739,33 @@ fn daemon_down(p: Palette) -> Element<'static, Message> {
     .into()
 }
 
+/// Centered body shown while switching tailnets (between teardown and connect).
+fn switching_body(state: &State, p: Palette) -> Element<'static, Message> {
+    let name = state
+        .switching_to
+        .clone()
+        .unwrap_or_else(|| "your tailnet".into());
+    container(
+        column![
+            icon::raw(icon::TRAY_CONNECTED, 48.0),
+            text(format!("Switching to {name}…"))
+                .size(16)
+                .font(SEMI)
+                .color(p.text),
+            text("Reconnecting to the tailnet.")
+                .size(12.5)
+                .color(p.text3),
+        ]
+        .spacing(10)
+        .align_x(Center),
+    )
+    .width(Fill)
+    .height(Fill)
+    .center_x(Fill)
+    .center_y(Fill)
+    .into()
+}
+
 // ---------------------------------------------------------------------------
 // Small view helpers
 // ---------------------------------------------------------------------------
@@ -1817,6 +1914,22 @@ fn delayed_clear() -> Task<Message> {
             let _ = rx.await;
         },
         |_| Message::ClearToast,
+    )
+}
+
+/// Safety net: ends the switching transition if the new tailnet never settles
+/// (so the spinner can't hang forever).
+fn switching_timeout() -> Task<Message> {
+    Task::perform(
+        async {
+            let (tx, rx) = iced::futures::channel::oneshot::channel::<()>();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(12));
+                let _ = tx.send(());
+            });
+            let _ = rx.await;
+        },
+        |_| Message::ClearSwitching,
     )
 }
 
