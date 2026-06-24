@@ -194,7 +194,7 @@ fn main() -> Result<()> {
         Command::Peers => {
             let status = client.status()?;
             let mut peers: Vec<_> = status.peers.values().collect();
-            peers.sort_by(|a, b| a.hostname.to_lowercase().cmp(&b.hostname.to_lowercase()));
+            peers.sort_by_key(|p| p.hostname.to_lowercase());
             for p in peers {
                 let dot = if p.online { "●" } else { "○" };
                 let ip = p.tailscale_ips.first().map(String::as_str).unwrap_or("-");

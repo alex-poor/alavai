@@ -214,7 +214,7 @@ fn fetch_gui(client: &Client) -> GuiSnapshot {
                 .collect()
         })
         .unwrap_or_default();
-    peers.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    peers.sort_by_key(|p| p.name.to_lowercase());
 
     let tailnets = client
         .profiles()
@@ -1294,7 +1294,7 @@ fn exit_picker(state: &State, p: Palette) -> Element<'static, Message> {
 
     // Eligible peers.
     let mut eligible: Vec<&PeerView> = snap.peers.iter().filter(|x| x.exit_node_option).collect();
-    eligible.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    eligible.sort_by_key(|p| p.name.to_lowercase());
     let mut peer_rows = column![caps("YOUR PEERS".into(), p)].spacing(2);
     if eligible.is_empty() {
         peer_rows = peer_rows.push(
