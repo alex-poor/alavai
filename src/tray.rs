@@ -19,7 +19,7 @@ use std::time::Duration;
 use anyhow::{Result, anyhow};
 use ksni::blocking::{Handle, TrayMethods};
 use ksni::menu::{RadioGroup, RadioItem, StandardItem};
-use ksni::{Category, Icon, MenuItem, Status as IconStatus, ToolTip, Tray};
+use ksni::{Category, Icon, MenuItem, OfflineReason, Status as IconStatus, ToolTip, Tray};
 
 use crate::icon;
 use crate::localapi::{Client, LiveState, Profile};
@@ -132,6 +132,19 @@ impl Tray for AppTray {
     /// Left-click opens the main window.
     fn activate(&mut self, _x: i32, _y: i32) {
         let _ = self.tx.send(Cmd::OpenWindow);
+    }
+
+    /// No StatusNotifierWatcher on the bus (yet). Returning `true` keeps the
+    /// service running so ksni registers automatically once a watcher appears
+    /// — covers the login race (we start before the panel) and shell restarts.
+    /// If SNI is genuinely absent (e.g. GNOME without the AppIndicator
+    /// extension) the icon just never shows, so leave a breadcrumb.
+    fn watcher_offline(&self, reason: OfflineReason) -> bool {
+        eprintln!(
+            "alavai: no system-tray host yet ({reason:?}); waiting — \
+             on GNOME, enable the AppIndicator/KStatusNotifierItem extension"
+        );
+        true
     }
 
     fn icon_name(&self) -> String {
@@ -330,7 +343,11 @@ pub fn run() -> Result<()> {
         snap: Snapshot::fetch(&client),
         tx: tx.clone(),
     };
-    let handle = tray.spawn().map_err(|e| {
+    // `assume_sni_available(true)`: treat "no watcher on the bus" as a soft
+    // error routed to `watcher_offline` instead of a hard spawn failure, so the
+    // icon appears whenever the host shows up rather than only when one is
+    // already running at launch (the login-startup race).
+    let handle = tray.assume_sni_available(true).spawn().map_err(|e| {
         anyhow!(
             "could not start the tray ({e}); is a StatusNotifierItem host running in your desktop?"
         )
