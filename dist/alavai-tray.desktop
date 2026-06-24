@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=alavai (tray)
+Comment=alavai system-tray daemon — one-click tailnet switching
+Exec=alavai tray
+Icon=alavai
+Terminal=false
+Categories=Network;
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

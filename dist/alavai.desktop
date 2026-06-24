@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=alavai
+GenericName=Tailscale client
+Comment=Lightweight Tailscale client with one-click tailnet switching
+Exec=alavai gui
+Icon=alavai
+Terminal=false
+Categories=Network;
+Keywords=tailscale;vpn;tailnet;mesh;wireguard;
+StartupNotify=true
