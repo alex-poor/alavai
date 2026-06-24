@@ -3,6 +3,7 @@
 //! Phase 0 ships a small CLI over the LocalAPI client. The tray daemon
 //! (`ksni`) and GUI (`iced`) land in later phases — see docs/PLAN.md.
 
+mod autostart;
 mod gui;
 mod icon;
 mod localapi;
@@ -76,6 +77,11 @@ enum Command {
     AdvertiseRoutes {
         /// CIDR prefixes, e.g. 192.168.1.0/24 (omit to clear).
         routes: Vec<String>,
+    },
+    /// Launch the tray on login (no state shows the current setting).
+    Autostart {
+        /// Turn launch-on-login on or off (omit to query).
+        state: Option<Toggle>,
     },
 }
 
@@ -332,6 +338,21 @@ fn main() -> Result<()> {
                 println!("Advertising routes: {}", routes.join(", "));
             }
         }
+
+        Command::Autostart { state } => match state {
+            Some(Toggle::On) => {
+                autostart::enable()?;
+                println!("Launch on login: enabled.");
+            }
+            Some(Toggle::Off) => {
+                autostart::disable()?;
+                println!("Launch on login: disabled.");
+            }
+            None => {
+                let on = autostart::is_enabled()?;
+                println!("Launch on login: {}", if on { "enabled" } else { "disabled" });
+            }
+        },
     }
 
     Ok(())
