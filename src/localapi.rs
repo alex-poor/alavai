@@ -166,6 +166,13 @@ impl Client {
         }))
     }
 
+    /// Connects (`true`) or disconnects (`false`) this node by setting the
+    /// `WantRunning` preference — the native LocalAPI equivalent of
+    /// `tailscale up` / `tailscale down`, without shelling out to the CLI.
+    pub fn set_want_running(&self, run: bool) -> Result<()> {
+        self.edit_prefs(json!({"WantRunning": run, "WantRunningSet": true}))
+    }
+
     /// Whether to accept subnet routes advertised by other nodes.
     pub fn set_accept_routes(&self, accept: bool) -> Result<()> {
         self.edit_prefs(json!({"RouteAll": accept, "RouteAllSet": true}))

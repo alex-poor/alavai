@@ -376,9 +376,8 @@ fn worker(client: Client, rx: std::sync::mpsc::Receiver<Cmd>, handle: Handle<App
             }
             Cmd::ToggleConn => {
                 let online = handle.update(|t| t.snap.online).unwrap_or(false);
-                let action = if online { "down" } else { "up" };
-                if let Err(e) = ProcCommand::new("tailscale").arg(action).status() {
-                    eprintln!("alavai: `tailscale {action}` failed: {e}");
+                if let Err(e) = client.set_want_running(!online) {
+                    eprintln!("alavai: toggle connection failed: {e}");
                 }
                 Some(()) // connection state arrives via the bus
             }

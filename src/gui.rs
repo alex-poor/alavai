@@ -352,9 +352,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         Message::ToggleConnection => {
             let online = state.snap.online;
             state.busy = true;
-            act(move |_| {
-                let action = if online { "down" } else { "up" };
-                let _ = ProcCommand::new("tailscale").arg(action).status();
+            act(move |c| {
+                let _ = c.set_want_running(!online);
             })
         }
         Message::SetAcceptRoutes(v) => {

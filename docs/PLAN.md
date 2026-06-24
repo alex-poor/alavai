@@ -1,9 +1,10 @@
 # alavai — Implementation Plan
 
-A Rust re-implementation of [trayscale](https://github.com/DeedleFake/trayscale)
-that keeps **all of its features**, makes **one-click tailnet switching** a
-first-class tray action, and ships as a **lightweight, distro- and
-DE/WM-agnostic** binary.
+A native, pure-Rust Tailscale GUI for Linux that makes **one-click tailnet
+switching** a first-class action and ships as a **lightweight, distro- and
+DE/WM-agnostic** binary. It aims for feature parity with
+[trayscale](https://github.com/DeedleFake/trayscale) (GTK/Go), which serves as
+the feature reference.
 
 This document is the roadmap. It is organised as:
 
@@ -93,7 +94,7 @@ to. ✅ done · 🟡 in progress · ⬜ planned.
 | trayscale feature | alavai | LocalAPI / mechanism |
 | --- | --- | --- |
 | Show status (online/offline, self addr) | ✅ CLI + tray + gui | `GET /status` |
-| Connect / disconnect | ✅ tray + gui (via `tailscale up/down`) | `EditPrefs{WantRunning}` + `Start` planned |
+| Connect / disconnect | ✅ tray + gui (native) | `EditPrefs{WantRunning}` |
 | Status tray icon (active/inactive/exit-node) | ✅ tray, live (themed; pixmap fallback in P5) | derived from bus state/prefs |
 | Live event updates | ✅ | `GET /watch-ipn-bus` (blocking stream thread) |
 | Operator-not-set warning dialog | ⬜ | compare prefs operator vs `$USER` |
@@ -168,7 +169,7 @@ Each phase is independently useful and ends in something runnable.
 - `ksni` (blocking API) SNI tray icon + menu — `alavai tray`.
 - Radio-group tailnet switcher: one click → `switch_profile`, with optimistic
   active indicator and worker-thread confirmation.
-- Connect/disconnect (via `tailscale up/down`), manual refresh, quit.
+- Connect/disconnect, manual refresh, quit.
 - Status-driven themed icon (connected / disconnected / exit-node) + tooltip.
 - 5s interval refresh (watch stream replaces it in Phase 2).
 - Non-blocking menu callbacks (channel → worker thread owning the client).

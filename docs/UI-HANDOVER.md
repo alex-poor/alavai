@@ -18,8 +18,8 @@ Read alongside:
 A **lightweight Tailscale client for Linux**. Tailscale is a mesh VPN: it puts all
 your devices (and shared ones) on a private network ("tailnet") where they can
 reach each other by name/IP regardless of physical location. There is no official
-Linux GUI; alavai is an unofficial one, re-implementing the features of an
-existing app (trayscale) in Rust.
+Linux GUI; alavai is an unofficial, native Rust one. It takes its feature set as
+a reference from an existing GTK/Go app, trayscale.
 
 Design pillars, in priority order:
 1. **One-click tailnet switching** is the headline feature and must stay

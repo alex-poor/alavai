@@ -19,11 +19,13 @@ environment or window manager.
 
 ## Why
 
-There's no official Tailscale GUI for Linux. [trayscale](https://github.com/DeedleFake/trayscale)
-fills that gap well; alavai is a from-scratch Rust take that keeps its features
-but optimises for being **lightweight and universal** — and makes the thing
-multi-account users do most, **switching tailnets**, a one-click, front-and-centre
-action in both the tray and the window.
+There's no official Tailscale GUI for Linux. alavai is a native, pure-Rust one
+built to be **lightweight and universal** — a single binary that's at home on any
+distro and desktop — and to make the thing multi-account users do most,
+**switching tailnets**, a one-click, front-and-centre action in both the tray and
+the window. The excellent [trayscale](https://github.com/DeedleFake/trayscale)
+(GTK/Go) showed what a good Linux Tailscale GUI looks like and is our feature
+reference.
 
 ## Features
 
@@ -114,8 +116,8 @@ to get started. Please also read the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Acknowledgements
 
-- [trayscale](https://github.com/DeedleFake/trayscale) by DeedleFake — the
-  feature reference this project re-implements.
+- [trayscale](https://github.com/DeedleFake/trayscale) by DeedleFake — an
+  inspiration and feature reference.
 - [Tailscale](https://tailscale.com) — the mesh VPN alavai is a client for
   (alavai is unofficial and not affiliated with Tailscale).
 - [Lucide](https://lucide.dev) — the symbolic icon set (ISC).
