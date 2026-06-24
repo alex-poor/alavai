@@ -4,3 +4,9 @@ Cargo.lock.orig
 *.swp
 .DS_Store
 /alavai.zip
+
+# makepkg build artifacts
+packaging/src/
+packaging/pkg/
+packaging/*.tar.gz
+packaging/*.pkg.tar.*
