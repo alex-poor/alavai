@@ -1,0 +1,207 @@
+.\" Man page for alavai. Install to $(mandir)/man1/alavai.1
+.TH ALAVAI 1 "2026-06-24" "alavai 0.1.0" "User Commands"
+.SH NAME
+alavai \- lightweight Tailscale client for Linux with one-click tailnet switching
+.SH SYNOPSIS
+.B alavai
+.I command
+.RI [ args ...]
+.br
+.B alavai
+.BR \-h | \-\-help
+.br
+.B alavai
+.BR \-V | \-\-version
+.SH DESCRIPTION
+.B alavai
+is a lightweight, native graphical client for the
+.BR tailscale (1)
+mesh VPN. It provides a system\-tray icon, a main window, and a small
+command\-line interface, with a focus on switching between configured tailnets
+(Tailscale login profiles) in one click.
+.PP
+alavai communicates directly with the local
+.B tailscaled
+daemon over its LocalAPI unix socket; it does not bundle the Tailscale client
+library. For most operations the current user must be configured as the
+Tailscale
+.IR operator
+(see
+.B REQUIREMENTS
+below).
+.SH COMMANDS
+.SS Surfaces
+.TP
+.B tray
+Run the system\-tray daemon. Exposes live connection status and a one\-click
+tailnet switcher via a StatusNotifierItem icon. Left\-click opens the main
+window. This is the long\-running foreground process.
+.TP
+.B gui
+Open the main window (peer list, exit nodes, routes, diagnostics, and the
+tailnet switcher).
+.SS Status and tailnets
+.TP
+.B status
+Show the current connection status and active tailnet.
+.TP
+.B tailnets
+List the configured tailnets (Tailscale login profiles); the active one is
+marked.
+.TP
+.B switch \fITAILNET\fR
+Switch to the tailnet identified by
+.IR TAILNET ,
+which may be its ID, profile name, or domain (for example
+.BR karo.co.nz ).
+.TP
+.B peers
+List the peers on the active tailnet with details (online state, address,
+relay, routes, traffic).
+.SS Diagnostics
+.TP
+.B netcheck
+Run a connectivity check (UDP, IPv4/IPv6, NAT traversal, captive portal,
+preferred relay and per\-region latencies). This invokes the
+.BR tailscale (1)
+CLI.
+.TP
+.B prefs
+Show the current preferences (exit node, routes, and related toggles).
+.TP
+.B watch
+Stream live state changes from the daemon's event bus. Intended for debugging.
+.SS Exit nodes and routes
+These commands change daemon preferences and require operator permission.
+.TP
+.B exit\-node \fIPEER\fR
+Use
+.IR PEER
+(a peer's name, ID, or IP address) as this machine's exit node. Pass
+.B none
+to stop using an exit node.
+.TP
+.B accept\-routes \fISTATE\fR
+Accept subnet routes advertised by other nodes.
+.I STATE
+is
+.B on
+or
+.BR off .
+.TP
+.B lan\-access \fISTATE\fR
+Keep access to the local LAN while an exit node is in use.
+.I STATE
+is
+.B on
+or
+.BR off .
+.TP
+.B advertise\-exit\-node \fISTATE\fR
+Advertise this machine as an exit node for the tailnet (subject to admin
+approval).
+.I STATE
+is
+.B on
+or
+.BR off .
+.TP
+.B advertise\-routes \fR[\fICIDR\fR ...]
+Advertise the given subnet routes (for example
+.BR 192.168.1.0/24 ).
+Pass no arguments to clear all advertised routes.
+.TP
+.B help \fR[\fICOMMAND\fR]
+Print help, optionally for a specific command.
+.SH OPTIONS
+.TP
+.BR \-h ", " \-\-help
+Print a help message and exit.
+.TP
+.BR \-V ", " \-\-version
+Print version information and exit.
+.SH EXAMPLES
+.PP
+Run the tray daemon (typically from an autostart entry):
+.PP
+.RS
+.nf
+alavai tray
+.fi
+.RE
+.PP
+Switch to a tailnet and confirm:
+.PP
+.RS
+.nf
+alavai switch karo.co.nz
+alavai status
+.fi
+.RE
+.PP
+Use a peer as exit node, then stop using it:
+.PP
+.RS
+.nf
+alavai exit\-node my\-exit\-host
+alavai exit\-node none
+.fi
+.RE
+.SH REQUIREMENTS
+.TP
+.B Tailscale daemon
+The
+.B tailscaled
+daemon must be running. Most actions require the invoking user to be the
+Tailscale operator:
+.PP
+.RS
+.nf
+sudo tailscale set \-\-operator=$USER
+.fi
+.RE
+.TP
+.B tailscale CLI
+The
+.BR tailscale (1)
+command is required for the
+.B netcheck
+subcommand.
+.TP
+.B System tray host
+The
+.B tray
+command requires a StatusNotifierItem host (such as KDE Plasma, GNOME with the
+AppIndicator extension, or most tray\-capable window managers).
+.TP
+.B Browser opener
+.B xdg\-open
+(from
+.BR xdg\-utils )
+is used to open the admin console and interactive\-login URLs.
+.SH FILES
+.TP
+.I /run/tailscale/tailscaled.sock
+The tailscaled LocalAPI unix socket alavai connects to. If absent,
+.I /var/run/tailscale/tailscaled.sock
+is tried.
+.SH EXIT STATUS
+.B alavai
+exits 0 on success and non\-zero if a command fails (for example, the daemon
+cannot be reached or the user is not the operator).
+.SH SEE ALSO
+.BR tailscale (1),
+.BR tailscaled (1)
+.PP
+Project home:
+.UR https://github.com/alex-poor/alavai
+.UE
+.SH BUGS
+Report issues at
+.UR https://github.com/alex-poor/alavai/issues
+.UE .
+.SH AUTHOR
+alavai is maintained by Alex Poor and contributors.
+.SH COPYRIGHT
+Copyright \(co 2026. Licensed under the GNU General Public License version 3 or
+later (GPL\-3.0\-or\-later).

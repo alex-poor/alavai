@@ -75,6 +75,9 @@ cargo build --release
 The tray needs a StatusNotifierItem host — KDE, GNOME with the AppIndicator
 extension, or most tray-capable window managers.
 
+A man page is provided at [`man/alavai.1`](man/alavai.1) (install to
+`$(mandir)/man1/`).
+
 ## Usage
 
 ```sh
