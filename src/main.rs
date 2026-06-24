@@ -154,9 +154,26 @@ fn main() -> Result<()> {
 
         Command::Watch => {
             client.watch_live(|s| {
-                let conn = if s.online { "online" } else { "offline" };
+                let conn = if s.online {
+                    "online"
+                } else if s.needs_login {
+                    "needs-login"
+                } else {
+                    "offline"
+                };
                 let exit = if s.exit_node_active { " exit-node" } else { "" };
-                println!("[{conn}{exit}] {} {}", s.machine, s.address);
+                let nm = if s.netmap_changed { " [netmap]" } else { "" };
+                println!(
+                    "[{conn}{exit}]{nm} {} ({}, {}) {} | accept-routes={} advertise-exit={} allow-lan={} routes={:?}",
+                    s.machine,
+                    s.fqdn,
+                    s.os,
+                    s.address,
+                    s.accept_routes,
+                    s.advertise_exit_node,
+                    s.allow_lan,
+                    s.advertised_routes,
+                );
             });
         }
 

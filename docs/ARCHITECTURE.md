@@ -30,8 +30,15 @@ but a single crate with modules is lighter and sufficient for now.
   runtime; async-io makes zbus run its own executor. As a bonus, the whole
   project no longer depends on tokio.
 - The window subscribes to `Client::watch_live` (bridged to an iced
-  `Subscription` via `iced::stream::channel`) and rebuilds a `GuiSnapshot` from
-  the `status` response + profile list on every change.
+  `Subscription` via `iced::stream::channel`) and updates **incrementally**:
+  - bus deltas that don't carry a NetMap (connection state, prefs/toggles,
+    login URL) are applied directly to the in-memory `GuiSnapshot` with **no
+    refetch** (`Message::Live` → `GuiSnapshot::apply_live`);
+  - only when a delta carries a NetMap (peers may have changed) does it do the
+    one heavier refresh — `status` + `prefs` + profiles → `Message::Snapshot`.
+  - User mutations refresh as needed; toggles/connect rely on the resulting bus
+    delta. This keeps the high-frequency event path allocation/round-trip free
+    while peers stay fresh on netmap changes (which the daemon rate-limits).
 
 ## The LocalAPI
 
@@ -55,7 +62,7 @@ but a single crate with modules is lighter and sufficient for now.
 | Event stream | GET | `/localapi/v0/watch-ipn-bus?mask=...` |
 | List profiles | GET | `/localapi/v0/profiles/` |
 | Current profile | GET | `/localapi/v0/profiles/current` |
-| Add profile | POST | `/localapi/v0/profiles/` |
+| Add profile | PUT | `/localapi/v0/profiles/` |
 | **Switch profile** | POST | `/localapi/v0/profiles/{id}` |
 | Delete profile | DELETE | `/localapi/v0/profiles/{id}` |
 | File targets | GET | `/localapi/v0/file-targets` |
@@ -82,8 +89,8 @@ followed by `POST /start` (changing the control URL similarly needs a restart).
 
 Regular endpoints return a normal body (we read to EOF with `Connection: close`,
 dechunking if `Transfer-Encoding: chunked`). `watch-ipn-bus` is a long-lived
-stream of length/newline-delimited JSON `ipn.Notify` objects — handled by the
-async client in Phase 2, not the blocking one.
+chunked stream of newline-delimited JSON `ipn.Notify` objects — read
+incrementally by the blocking `Client::watch_live` reader (no async runtime).
 
 ## State model (mirrors trayscale's Poller)
 

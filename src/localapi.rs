@@ -1,17 +1,16 @@
 //! Minimal client for the Tailscale LocalAPI.
 //!
 //! `tailscaled` exposes an HTTP API over a unix domain socket
-//! (`/run/tailscale/tailscaled.sock`). Trayscale talks to this same API via
-//! the Go `tailscale.com/client/local` package; we reimplement just the slice
-//! of it that alavai needs, with no Go and no bundled Tailscale library.
+//! (`/run/tailscale/tailscaled.sock`). Tailscale's own Go `client/local`
+//! package speaks the same API; we implement just the slice alavai needs, with
+//! no Go and no bundled Tailscale library.
 //!
-//! Phase 0 uses a blocking, one-shot-per-request client — perfectly adequate
-//! for a CLI and for the tray's occasional commands. Phase 2 adds an async
-//! client (tokio + hyper) for the long-lived `watch-ipn-bus` event stream.
+//! It's a blocking client throughout — one-shot request/response for commands,
+//! plus a long-lived blocking reader for the `watch-ipn-bus` event stream
+//! ([`Client::watch_live`]). No async runtime is involved.
 //!
 //! Accessing the socket requires the current user to be the Tailscale
-//! "operator" (`sudo tailscale set --operator=$USER`), exactly as trayscale
-//! documents.
+//! "operator" (`sudo tailscale set --operator=$USER`).
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
@@ -461,6 +460,8 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 
 /// `ipn.State` value for a fully-connected backend.
 const STATE_RUNNING: i64 = 6;
+/// `ipn.State` value for a backend with no tailnet logged in.
+const STATE_NEEDS_LOGIN: i64 = 2;
 
 /// The notify-mask bits we subscribe to: initial State, Prefs and NetMap, plus
 /// rate-limiting of netmap spam. (Engine/bandwidth updates are intentionally
@@ -472,11 +473,24 @@ const WATCH_MASK: u64 = (1 << 1) | (1 << 2) | (1 << 3) | (1 << 8);
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct LiveState {
     pub online: bool,
+    /// True when the daemon is reachable but no tailnet is logged in.
+    pub needs_login: bool,
     pub exit_node_active: bool,
     pub machine: String,
+    pub fqdn: String,
+    pub os: String,
+    /// First (preferred) Tailscale address — convenience for the tray.
     pub address: String,
+    pub addresses: Vec<String>,
+    pub accept_routes: bool,
+    pub advertise_exit_node: bool,
+    pub allow_lan: bool,
+    pub advertised_routes: Vec<String>,
     /// Set when the daemon wants the user to open a browser to authenticate.
     pub browse_to_url: Option<String>,
+    /// Transient: this delta carried a NetMap, so peers may have changed and a
+    /// consumer should refresh its peer list. (Not part of equality.)
+    pub netmap_changed: bool,
 }
 
 impl Client {
@@ -574,19 +588,41 @@ fn read_chunk_size(reader: &mut impl BufRead) -> Result<Option<usize>> {
 /// anything user-visible changed.
 fn merge_notify(live: &mut LiveState, n: Notify) -> bool {
     let mut changed = false;
+    // A NetMap in this delta means peers may have changed: always emit so the
+    // consumer can refresh its peer list, even if no self/prefs field changed.
+    let had_netmap = n.netmap.is_some();
+    live.netmap_changed = had_netmap;
 
     if let Some(state) = n.state {
         let online = state == STATE_RUNNING;
-        if online != live.online {
+        let needs_login = state == STATE_NEEDS_LOGIN;
+        if online != live.online || needs_login != live.needs_login {
             live.online = online;
+            live.needs_login = needs_login;
             changed = true;
         }
     }
 
     if let Some(p) = n.prefs {
         let exit = !p.exit_node_id.is_empty() || !p.exit_node_ip.is_empty();
-        if exit != live.exit_node_active {
+        let advertise_exit = p.advertise_routes.iter().any(|r| is_default_route(r));
+        let subnets: Vec<String> = p
+            .advertise_routes
+            .iter()
+            .filter(|r| !is_default_route(r))
+            .cloned()
+            .collect();
+        if exit != live.exit_node_active
+            || p.route_all != live.accept_routes
+            || advertise_exit != live.advertise_exit_node
+            || p.exit_node_allow_lan != live.allow_lan
+            || subnets != live.advertised_routes
+        {
             live.exit_node_active = exit;
+            live.accept_routes = p.route_all;
+            live.advertise_exit_node = advertise_exit;
+            live.allow_lan = p.exit_node_allow_lan;
+            live.advertised_routes = subnets;
             changed = true;
         }
     }
@@ -597,13 +633,24 @@ fn merge_notify(live: &mut LiveState, n: Notify) -> bool {
         } else {
             sn.name.trim_end_matches('.').to_string()
         };
-        if machine != live.machine {
+        let fqdn = sn.name.trim_end_matches('.').to_string();
+        // NetMap addresses are CIDRs (e.g. 100.69.38.30/32); strip to bare IPs
+        // so they match the `status` representation the GUI also uses.
+        let addresses: Vec<String> = sn
+            .addresses
+            .iter()
+            .map(|a| a.split('/').next().unwrap_or(a).to_string())
+            .collect();
+        if machine != live.machine
+            || fqdn != live.fqdn
+            || sn.hostinfo.os != live.os
+            || addresses != live.addresses
+        {
             live.machine = machine;
-            changed = true;
-        }
-        let address = pick_address(&sn.addresses);
-        if address != live.address {
-            live.address = address;
+            live.fqdn = fqdn;
+            live.os = sn.hostinfo.os;
+            live.address = pick_address(&sn.addresses);
+            live.addresses = addresses;
             changed = true;
         }
     }
@@ -616,7 +663,7 @@ fn merge_notify(live: &mut LiveState, n: Notify) -> bool {
         changed = true;
     }
 
-    changed
+    changed || had_netmap
 }
 
 /// Picks a display address from a node's CIDR list, preferring IPv4.
@@ -650,6 +697,16 @@ struct NotifyPrefs {
     exit_node_id: String,
     #[serde(rename = "ExitNodeIP", default)]
     exit_node_ip: String,
+    #[serde(rename = "RouteAll", default)]
+    route_all: bool,
+    #[serde(rename = "ExitNodeAllowLANAccess", default)]
+    exit_node_allow_lan: bool,
+    #[serde(
+        rename = "AdvertiseRoutes",
+        default,
+        deserialize_with = "null_as_empty_vec"
+    )]
+    advertise_routes: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -672,6 +729,8 @@ struct NotifySelfNode {
 struct NotifyHostinfo {
     #[serde(rename = "Hostname", default)]
     hostname: String,
+    #[serde(rename = "OS", default)]
+    os: String,
 }
 
 // ---------------------------------------------------------------------------

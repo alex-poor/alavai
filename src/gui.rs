@@ -18,7 +18,7 @@ use iced::{Center, Color, Element, Fill, Font, Length, Padding, Size, Subscripti
 use iced::alignment::{Horizontal, Vertical};
 
 use crate::icon::{self, icon};
-use crate::localapi::{self, Client, NetcheckReport, Profile};
+use crate::localapi::{self, Client, LiveState, NetcheckReport, Profile};
 use crate::theme::{self, Palette};
 
 const ADMIN_URL: &str = "https://login.tailscale.com/admin";
@@ -123,7 +123,10 @@ struct State {
 
 #[derive(Debug, Clone)]
 enum Message {
+    /// Full refresh (boot, and on netmap changes where peers may have changed).
     Snapshot(GuiSnapshot),
+    /// Lightweight delta from the IPN bus — applied without any refetch.
+    Live(LiveState),
     Select(Selection),
     Filter(String),
     SwitchTailnet(String),
@@ -253,6 +256,32 @@ fn fetch_gui(client: &Client) -> GuiSnapshot {
     }
 }
 
+impl GuiSnapshot {
+    /// Applies a bus delta in place — everything the IPN bus carries (self,
+    /// prefs, connection state), without touching peers/profiles or refetching.
+    fn apply_live(&mut self, live: &LiveState) {
+        self.online = live.online;
+        self.needs_login = live.needs_login;
+        self.reachable = true;
+        self.accept_routes = live.accept_routes;
+        self.advertise_exit_node = live.advertise_exit_node;
+        self.allow_lan = live.allow_lan;
+        self.advertised_routes = live.advertised_routes.clone();
+        if !live.machine.is_empty() {
+            self.machine = live.machine.clone();
+        }
+        if !live.fqdn.is_empty() {
+            self.fqdn = live.fqdn.clone();
+        }
+        if !live.os.is_empty() {
+            self.os = live.os.clone();
+        }
+        if !live.addresses.is_empty() {
+            self.addrs = live.addresses.clone();
+        }
+    }
+}
+
 /// Runs a blocking mutation, then refetches — as one iced task.
 fn act<F>(f: F) -> Task<Message>
 where
@@ -314,6 +343,25 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 .filter(|u| state.last_login_url.as_deref() != Some(u.as_str()))
                 .cloned();
             state.snap = snap;
+            state.busy = false;
+            state.switching = false;
+            if let Some(url) = new_login {
+                state.last_login_url = Some(url.clone());
+                let _ = ProcCommand::new("xdg-open").arg(&url).spawn();
+                state.toast = Some("Opened your browser to finish signing in".into());
+                return delayed_clear();
+            }
+            Task::none()
+        }
+        Message::Live(live) => {
+            // Pure delta from the bus: no refetch. Peers/profiles are untouched
+            // (they refresh via Snapshot when the netmap changes).
+            let new_login = live
+                .browse_to_url
+                .as_ref()
+                .filter(|u| state.last_login_url.as_deref() != Some(u.as_str()))
+                .cloned();
+            state.snap.apply_live(&live);
             state.busy = false;
             state.switching = false;
             if let Some(url) = new_login {
@@ -1780,9 +1828,15 @@ fn watch_stream() -> impl Stream<Item = Message> {
             let _ = output.try_send(Message::Snapshot(fetch_gui(&client)));
             let probe = client.clone();
             client.watch_live(move |live| {
-                let mut snap = fetch_gui(&probe);
-                snap.login_url = live.browse_to_url;
-                let _ = output.try_send(Message::Snapshot(snap));
+                if live.netmap_changed {
+                    // Peers may have changed — do the one heavier refresh here.
+                    let mut snap = fetch_gui(&probe);
+                    snap.login_url = live.browse_to_url.clone();
+                    let _ = output.try_send(Message::Snapshot(snap));
+                } else {
+                    // State / prefs / login change only — apply as a pure delta.
+                    let _ = output.try_send(Message::Live(live));
+                }
             });
         });
         std::future::pending::<()>().await;
