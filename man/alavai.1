@@ -1,5 +1,5 @@
 .\" Man page for alavai. Install to $(mandir)/man1/alavai.1
-.TH ALAVAI 1 "2026-06-24" "alavai 0.2.0" "User Commands"
+.TH ALAVAI 1 "2026-06-25" "alavai 0.2.1" "User Commands"
 .SH NAME
 alavai \- lightweight Tailscale client for Linux with one-click tailnet switching
 .SH SYNOPSIS
@@ -111,6 +111,16 @@ Advertise the given subnet routes (for example
 .BR 192.168.1.0/24 ).
 Pass no arguments to clear all advertised routes.
 .TP
+.B autostart \fR[\fISTATE\fR]
+Launch the tray daemon automatically on login by managing an XDG autostart
+entry.
+.I STATE
+is
+.B on
+or
+.BR off ;
+omit it to print the current setting.
+.TP
 .B help \fR[\fICOMMAND\fR]
 Print help, optionally for a specific command.
 .SH OPTIONS
@@ -185,6 +195,14 @@ is used to open the admin console and interactive\-login URLs.
 The tailscaled LocalAPI unix socket alavai connects to. If absent,
 .I /var/run/tailscale/tailscaled.sock
 is tried.
+.TP
+.I ~/.config/autostart/alavai\-tray.desktop
+XDG autostart entry written by
+.BR "alavai autostart on" ,
+removed by
+.BR "alavai autostart off" .
+Honors
+.BR $XDG_CONFIG_HOME .
 .SH EXIT STATUS
 .B alavai
 exits 0 on success and non\-zero if a command fails (for example, the daemon

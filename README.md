@@ -89,6 +89,7 @@ alavai status      # connection status + active tailnet
 alavai tailnets    # list configured tailnets (● = active)
 alavai peers       # list peers (online, IP, relay, routes, traffic)
 alavai netcheck    # connectivity diagnostics
+alavai autostart on # launch the tray on login (off / omit to disable / query)
 ```
 
 Run `alavai --help` for the full command list.

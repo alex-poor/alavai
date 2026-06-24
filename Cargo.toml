@@ -1,6 +1,6 @@
 [package]
 name = "alavai"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "A lightweight, distro-agnostic Tailscale client for Linux with one-click tailnet switching"
 license = "GPL-3.0-or-later"
