@@ -152,7 +152,11 @@ impl Tray for AppTray {
         [22u32, 44]
             .iter()
             .filter_map(|&size| {
-                icon::render_argb(svg, size).map(|(width, height, data)| Icon { width, height, data })
+                icon::render_argb(svg, size).map(|(width, height, data)| Icon {
+                    width,
+                    height,
+                    data,
+                })
             })
             .collect()
     }
@@ -327,7 +331,9 @@ pub fn run() -> Result<()> {
         tx: tx.clone(),
     };
     let handle = tray.spawn().map_err(|e| {
-        anyhow!("could not start the tray ({e}); is a StatusNotifierItem host running in your desktop?")
+        anyhow!(
+            "could not start the tray ({e}); is a StatusNotifierItem host running in your desktop?"
+        )
     })?;
 
     // Event-driven updates: stream the IPN bus and forward live deltas.

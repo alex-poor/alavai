@@ -1,0 +1,51 @@
+name: Bug report
+description: Something isn't working as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for taking the time to file a bug! Please fill in the details below.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, and what you expected instead.
+      placeholder: When I click ..., alavai ...
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run `alavai ...`
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: distro
+    attributes:
+      label: Distro
+      placeholder: e.g. Arch, Ubuntu 24.04, Fedora 40
+    validations:
+      required: true
+  - type: input
+    id: desktop
+    attributes:
+      label: Desktop environment / window manager
+      placeholder: e.g. KDE Plasma (Wayland), GNOME, Hyprland, sway
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: alavai & Tailscale versions
+      placeholder: "alavai: <commit/tag> · tailscale: `tailscale version`"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / output
+      description: Any terminal output (run from a terminal to capture it). This is automatically formatted as code.
+      render: shell

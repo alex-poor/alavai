@@ -319,7 +319,11 @@ pub struct Peer {
     #[serde(rename = "LastHandshake", default)]
     pub last_handshake: String,
     /// Subnet routes this peer advertises and serves.
-    #[serde(rename = "PrimaryRoutes", default, deserialize_with = "null_as_empty_vec")]
+    #[serde(
+        rename = "PrimaryRoutes",
+        default,
+        deserialize_with = "null_as_empty_vec"
+    )]
     pub primary_routes: Vec<String>,
 }
 
@@ -336,7 +340,11 @@ pub struct Prefs {
     pub exit_node_ip: String,
     #[serde(rename = "ExitNodeAllowLANAccess", default)]
     pub exit_node_allow_lan: bool,
-    #[serde(rename = "AdvertiseRoutes", default, deserialize_with = "null_as_empty_vec")]
+    #[serde(
+        rename = "AdvertiseRoutes",
+        default,
+        deserialize_with = "null_as_empty_vec"
+    )]
     pub advertise_routes: Vec<String>,
     #[serde(rename = "WantRunning", default)]
     pub want_running: bool,
@@ -383,7 +391,8 @@ where
 /// Splits an HTTP/1.1 response into status + body, dechunking if necessary, and
 /// returns the body bytes. Errors on a non-2xx status, surfacing the body text.
 fn parse_http_response(raw: &[u8]) -> Result<Vec<u8>> {
-    let split = find(raw, b"\r\n\r\n").ok_or_else(|| anyhow!("malformed HTTP response (no header terminator)"))?;
+    let split = find(raw, b"\r\n\r\n")
+        .ok_or_else(|| anyhow!("malformed HTTP response (no header terminator)"))?;
     let headers = &raw[..split];
     let mut body = raw[split + 4..].to_vec();
 
@@ -405,7 +414,10 @@ fn parse_http_response(raw: &[u8]) -> Result<Vec<u8>> {
     }
 
     if !(200..300).contains(&code) {
-        bail!("LocalAPI returned HTTP {code}: {}", String::from_utf8_lossy(&body).trim());
+        bail!(
+            "LocalAPI returned HTTP {code}: {}",
+            String::from_utf8_lossy(&body).trim()
+        );
     }
     Ok(body)
 }
@@ -433,9 +445,7 @@ fn dechunk(mut data: &[u8]) -> Result<Vec<u8>> {
 
 /// Finds the first index of `needle` within `haystack`.
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|w| w == needle)
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 // ---------------------------------------------------------------------------
@@ -591,11 +601,12 @@ fn merge_notify(live: &mut LiveState, n: Notify) -> bool {
         }
     }
 
-    if let Some(url) = n.browse_to_url {
-        if !url.is_empty() && live.browse_to_url.as_deref() != Some(url.as_str()) {
-            live.browse_to_url = Some(url);
-            changed = true;
-        }
+    if let Some(url) = n.browse_to_url
+        && !url.is_empty()
+        && live.browse_to_url.as_deref() != Some(url.as_str())
+    {
+        live.browse_to_url = Some(url);
+        changed = true;
     }
 
     changed
@@ -671,7 +682,11 @@ pub struct NetcheckReport {
     pub ipv4: bool,
     #[serde(rename = "IPv6", default)]
     pub ipv6: bool,
-    #[serde(rename = "MappingVariesByDestIP", default, deserialize_with = "opt_bool")]
+    #[serde(
+        rename = "MappingVariesByDestIP",
+        default,
+        deserialize_with = "opt_bool"
+    )]
     pub mapping_varies: Option<bool>,
     #[serde(rename = "UPnP", default, deserialize_with = "opt_bool")]
     pub upnp: Option<bool>,

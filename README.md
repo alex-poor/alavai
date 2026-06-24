@@ -1,80 +1,125 @@
 # alavai
 
-A lightweight, distro-agnostic **Tailscale client for Linux** — a Rust
-re-implementation of the core functionality of
-[trayscale](https://github.com/DeedleFake/trayscale), with **one-click tailnet
-switching** built in from the start.
+A lightweight, distro-agnostic **Tailscale client for Linux**, with **one-click
+tailnet switching** built in from the start. Written in Rust — a single
+self-contained binary, no GTK/Qt system dependencies, at home in any desktop
+environment or window manager.
 
-> Status: **Phase 3 + UI redesign (pass 1).** The main window now follows the
-> design system in [docs/design](docs/design) — a sidebar + detail layout with
-> light/dark tokens, the tailnet switcher and connection status in a persistent
-> header, a filterable peer list, this-machine settings wired to the daemon
-> (exit-node advertise, accept-routes, LAN access), and a peer detail view. The
-> tray delivers the headline one-click tailnet switching, live from the event bus.
-> Remaining design screens and feature parity are tracked in [docs/PLAN.md](docs/PLAN.md).
+[![CI](https://github.com/alex-poor/alavai/actions/workflows/ci.yml/badge.svg)](https://github.com/alex-poor/alavai/actions/workflows/ci.yml)
+[![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
+[![Made with Rust](https://img.shields.io/badge/made%20with-Rust-orange.svg)](https://www.rust-lang.org/)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+
+> Status: **early but functional.** The system tray and main window are usable
+> today — see [Features](#features). A few features that depend on tailnet
+> settings we couldn't test against (Taildrop, Mullvad) are scoped but not yet
+> built. Roadmap and progress: [docs/PLAN.md](docs/PLAN.md).
 
 ![alavai main window](docs/screenshot.png)
 
-## Goals
+## Why
 
-- **Feature parity with trayscale** — exit nodes, Mullvad, Taildrop send/receive,
-  advertised routes, subnet routes, netcheck diagnostics, control-server URL,
-  login, notifications. (Look and workflow need *not* match — only features.)
-- **One-click tailnet switching out of the box** — right-click the tray icon,
-  pick a configured tailnet, switch instantly.
-- **Lightweight and portable** — a single self-contained binary with no GTK/Qt
-  system dependencies; runs cleanly on any Linux distro and looks consistent in
-  any desktop environment or window manager.
+There's no official Tailscale GUI for Linux. [trayscale](https://github.com/DeedleFake/trayscale)
+fills that gap well; alavai is a from-scratch Rust take that keeps its features
+but optimises for being **lightweight and universal** — and makes the thing
+multi-account users do most, **switching tailnets**, a one-click, front-and-centre
+action in both the tray and the window.
+
+## Features
+
+- **One-click tailnet switching** — right-click the tray icon (or use the
+  in-window switcher) and pick a configured tailnet. Add, manage, and log in to
+  tailnets from the GUI.
+- **System tray** — a StatusNotifierItem icon with live status (connected /
+  disconnected / exit-node-active), connect/disconnect, and the tailnet switcher.
+- **Live main window** — sidebar of peers + detail pane, updating instantly from
+  the Tailscale event bus. Light and dark themes.
+- **Exit nodes** — pick a peer (or "Automatic"), keep LAN access, advertise this
+  machine as an exit node.
+- **Routes** — accept subnet routes; advertise your own (add/remove CIDRs).
+- **Per-peer detail** — addresses, online/last-seen, connection type, routes,
+  copy-to-clipboard.
+- **Diagnostics** — built-in `netcheck` (UDP, IPv4/IPv6, NAT traversal, captive
+  portal, relay latencies).
+- **Robust states** — operator-permission banner, daemon-down, and logged-in /
+  logged-out flows.
+- **Responsive** — adapts from a wide sidebar+detail layout down to a narrow
+  single-column view for tiling WMs.
+- **A small CLI** — `status`, `tailnets`, `switch`, `peers`, `netcheck`, and more.
 
 ## How it works
 
 alavai talks directly to the local `tailscaled` daemon over its unix-socket
 **LocalAPI** (`/run/tailscale/tailscaled.sock`) — no Go, no bundled Tailscale
-library. The same prerequisite as trayscale applies: the current user must be
-the Tailscale *operator*:
+library. As with trayscale, the current user must be the Tailscale *operator*:
 
 ```sh
 sudo tailscale set --operator=$USER
 ```
 
-## Recommended stack
+## Install
 
-| Concern        | Choice                                  | Why |
-| -------------- | --------------------------------------- | --- |
-| Tailscale I/O  | custom LocalAPI client over unix socket | no Go runtime, full control, validated |
-| Tray           | [`ksni`](https://crates.io/crates/ksni) | pure-Rust StatusNotifierItem; DE/WM-agnostic |
-| GUI            | [`iced`](https://iced.rs)               | pure Rust, no system toolkit libs, consistent everywhere |
-| Async runtime  | `tokio`                                 | drives the `watch-ipn-bus` event stream |
-| Notifications  | `notify-rust`                           | freedesktop notifications, DE-agnostic |
-| Config         | `toml` + `directories` (XDG)            | declare/pin tailnets for the tray |
+### Build from source
+
+Requirements: **Rust** (2024 edition — 1.85+) and the Tailscale CLI/daemon.
+
+```sh
+git clone https://github.com/alex-poor/alavai
+cd alavai
+cargo build --release
+./target/release/alavai tray   # run the tray daemon
+```
+
+The tray needs a StatusNotifierItem host — KDE, GNOME with the AppIndicator
+extension, or most tray-capable window managers.
 
 ## Usage
 
 ```sh
-cargo run -- tray        # run the system-tray daemon (one-click tailnet switching)
-cargo run -- gui         # open the main window
+alavai tray        # system-tray daemon (one-click tailnet switching)
+alavai gui         # open the main window
+alavai switch karo # switch tailnet by id, name, or domain
 
-cargo run -- status      # current connection status + active tailnet
-cargo run -- tailnets    # list configured tailnets (● = active)
-cargo run -- switch karo # switch by id, name, or domain
-cargo run -- watch       # stream live state changes (debug)
-
-cargo run -- prefs       # show exit-node / routes / toggle state
-cargo run -- peers       # list peers (online, IP, relay, routes, traffic)
-cargo run -- netcheck    # connectivity diagnostics
-
-# mutating (route through the daemon's prefs):
-cargo run -- exit-node <peer|none>      # use a peer as exit node
-cargo run -- accept-routes <on|off>
-cargo run -- lan-access <on|off>        # LAN access while using an exit node
-cargo run -- advertise-exit-node <on|off>
-cargo run -- advertise-routes 192.168.1.0/24 …   # (omit to clear)
+alavai status      # connection status + active tailnet
+alavai tailnets    # list configured tailnets (● = active)
+alavai peers       # list peers (online, IP, relay, routes, traffic)
+alavai netcheck    # connectivity diagnostics
 ```
 
-The tray exposes each configured tailnet as a one-click item, plus
-connect/disconnect, refresh, and quit. It needs a StatusNotifierItem host
-(KDE, GNOME with the AppIndicator extension, or most tray-capable WMs).
+Run `alavai --help` for the full command list.
+
+## Tech stack
+
+| Concern       | Choice                                                   |
+| ------------- | -------------------------------------------------------- |
+| Tailscale I/O | a custom LocalAPI client over the unix socket (no Go)    |
+| Event stream  | a blocking `watch-ipn-bus` reader (no async runtime)     |
+| Tray          | [`ksni`](https://crates.io/crates/ksni) (StatusNotifierItem) |
+| GUI           | [`iced`](https://iced.rs), tiny-skia software renderer (no GPU dep) |
+| Icons         | bundled SVGs rendered with `resvg`                       |
+
+No `tokio`, no GTK/Qt, no wgpu. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Contributing
+
+Contributions are very welcome — see **[CONTRIBUTING.md](CONTRIBUTING.md)** for how
+to build, run, and submit changes, and **[good first issues](https://github.com/alex-poor/alavai/labels/good%20first%20issue)**
+to get started. Please also read the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## Documentation
+
+- [docs/PLAN.md](docs/PLAN.md) — roadmap and feature-parity matrix
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how it's wired
+- [docs/design/DESIGN.md](docs/design/DESIGN.md) — the UI design system
+
+## Acknowledgements
+
+- [trayscale](https://github.com/DeedleFake/trayscale) by DeedleFake — the
+  feature reference this project re-implements.
+- [Tailscale](https://tailscale.com) — the mesh VPN alavai is a client for
+  (alavai is unofficial and not affiliated with Tailscale).
+- [Lucide](https://lucide.dev) — the symbolic icon set (ISC).
 
 ## License
 
-GPL-3.0-or-later — see [LICENSE](LICENSE).
+[GPL-3.0-or-later](LICENSE).

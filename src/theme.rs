@@ -203,7 +203,11 @@ pub fn primary_btn(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Sty
         button::Style {
             background: Some(Background::Color(bg)),
             text_color: Color::WHITE,
-            border: Border { color: Color::TRANSPARENT, width: 0.0, radius: 8.0.into() },
+            border: Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius: 8.0.into(),
+            },
             ..Default::default()
         }
     }
@@ -219,7 +223,11 @@ pub fn secondary_btn(p: Palette) -> impl Fn(&Theme, button::Status) -> button::S
         button::Style {
             background: Some(Background::Color(bg)),
             text_color: p.text,
-            border: Border { color: p.line, width: 1.0, radius: 8.0.into() },
+            border: Border {
+                color: p.line,
+                width: 1.0,
+                radius: 8.0.into(),
+            },
             ..Default::default()
         }
     }
@@ -235,7 +243,11 @@ pub fn danger_btn(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Styl
         button::Style {
             background: Some(Background::Color(bg)),
             text_color: Color::WHITE,
-            border: Border { color: Color::TRANSPARENT, width: 0.0, radius: 8.0.into() },
+            border: Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius: 8.0.into(),
+            },
             ..Default::default()
         }
     }
@@ -254,7 +266,11 @@ pub fn row_btn(p: Palette, selected: bool) -> impl Fn(&Theme, button::Status) ->
         button::Style {
             background: bg,
             text_color: p.text,
-            border: Border { color: Color::TRANSPARENT, width: 0.0, radius: 7.0.into() },
+            border: Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius: 7.0.into(),
+            },
             ..Default::default()
         }
     }
@@ -270,7 +286,11 @@ pub fn small_btn(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style
         button::Style {
             background: Some(Background::Color(bg)),
             text_color: p.text2,
-            border: Border { color: p.line, width: 1.0, radius: 6.0.into() },
+            border: Border {
+                color: p.line,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
             ..Default::default()
         }
     }
@@ -285,7 +305,11 @@ pub fn input(p: Palette) -> impl Fn(&Theme, text_input::Status) -> text_input::S
         };
         text_input::Style {
             background: Background::Color(p.raised),
-            border: Border { color: border_color, width: 1.0, radius: 7.0.into() },
+            border: Border {
+                color: border_color,
+                width: 1.0,
+                radius: 7.0.into(),
+            },
             icon: p.text3,
             placeholder: p.text3,
             value: p.text,

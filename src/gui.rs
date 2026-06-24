@@ -11,7 +11,7 @@ use std::process::Command as ProcCommand;
 use anyhow::Result;
 use iced::futures::Stream;
 use iced::widget::{
-    button, column, container, mouse_area, row, scrollable, stack, text, text_input, toggler, Space,
+    Space, button, column, container, mouse_area, row, scrollable, stack, text, text_input, toggler,
 };
 use iced::{Center, Color, Element, Fill, Font, Length, Padding, Size, Subscription, Task};
 
@@ -177,10 +177,17 @@ fn fetch_gui(client: &Client) -> GuiSnapshot {
     };
 
     let (machine, fqdn, os) = match status.as_ref().and_then(|s| s.self_node.as_ref()) {
-        Some(n) => (n.hostname.clone(), n.dns_name.trim_end_matches('.').to_string(), n.os.clone()),
+        Some(n) => (
+            n.hostname.clone(),
+            n.dns_name.trim_end_matches('.').to_string(),
+            n.os.clone(),
+        ),
         None => (String::new(), String::new(), String::new()),
     };
-    let addrs = status.as_ref().map(|s| s.tailscale_ips.clone()).unwrap_or_default();
+    let addrs = status
+        .as_ref()
+        .map(|s| s.tailscale_ips.clone())
+        .unwrap_or_default();
 
     let mut peers: Vec<PeerView> = status
         .as_ref()
@@ -215,7 +222,11 @@ fn fetch_gui(client: &Client) -> GuiSnapshot {
         .into_iter()
         .filter(|p| !p.is_empty())
         .collect();
-    let current_id = client.current_profile().ok().map(|p| p.id).unwrap_or_default();
+    let current_id = client
+        .current_profile()
+        .ok()
+        .map(|p| p.id)
+        .unwrap_or_default();
 
     GuiSnapshot {
         online,
@@ -228,12 +239,17 @@ fn fetch_gui(client: &Client) -> GuiSnapshot {
         accept_routes: prefs.as_ref().is_some_and(|p| p.route_all),
         advertise_exit_node: prefs.as_ref().is_some_and(|p| p.advertises_exit_node()),
         allow_lan: prefs.as_ref().is_some_and(|p| p.exit_node_allow_lan),
-        advertised_routes: prefs.as_ref().map(|p| p.subnet_routes()).unwrap_or_default(),
+        advertised_routes: prefs
+            .as_ref()
+            .map(|p| p.subnet_routes())
+            .unwrap_or_default(),
         peers,
         login_url: None,
         reachable,
         operator_ok,
-        needs_login: status.as_ref().is_some_and(|s| s.backend_state == "NeedsLogin"),
+        needs_login: status
+            .as_ref()
+            .is_some_and(|s| s.backend_state == "NeedsLogin"),
     }
 }
 
@@ -285,10 +301,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
     match message {
         Message::Snapshot(snap) => {
             // Keep the selected peer valid across refreshes.
-            if let Selection::Peer(id) = &state.selection {
-                if !snap.peers.iter().any(|p| &p.id == id) {
-                    state.selection = Selection::ThisMachine;
-                }
+            if let Selection::Peer(id) = &state.selection
+                && !snap.peers.iter().any(|p| &p.id == id)
+            {
+                state.selection = Selection::ThisMachine;
             }
             // A new interactive-login URL means a sign-in is in progress: open
             // the browser once and let the user know.
@@ -368,10 +384,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         Message::UseExitNodeAuto => {
             state.busy = true;
             act(|c| {
-                if let Ok(id) = c.suggest_exit_node() {
-                    if !id.is_empty() {
-                        let _ = c.set_exit_node(&id);
-                    }
+                if let Ok(id) = c.suggest_exit_node()
+                    && !id.is_empty()
+                {
+                    let _ = c.set_exit_node(&id);
                 }
             })
         }
@@ -383,7 +399,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::Copy(value) => {
             let toast = format!("Copied {value}");
-            Task::batch([iced::clipboard::write(value), Task::done(Message::Toast(toast))])
+            Task::batch([
+                iced::clipboard::write(value),
+                Task::done(Message::Toast(toast)),
+            ])
         }
         Message::ToggleTheme => {
             state.dark = !state.dark;
@@ -526,7 +545,11 @@ fn theme(state: &State) -> iced::Theme {
 }
 
 fn palette(state: &State) -> Palette {
-    if state.dark { theme::dark() } else { theme::light() }
+    if state.dark {
+        theme::dark()
+    } else {
+        theme::light()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -557,12 +580,18 @@ fn view(state: &State) -> Element<'_, Message> {
         .style(move |_| theme::window(p));
 
     if state.switcher_open {
-        let scrim = mouse_area(
-            container(Space::new().width(Fill).height(Fill)).style(|_| container::Style {
-                background: Some(Color { a: 0.35, ..Color::BLACK }.into()),
+        let scrim = mouse_area(container(Space::new().width(Fill).height(Fill)).style(|_| {
+            container::Style {
+                background: Some(
+                    Color {
+                        a: 0.35,
+                        ..Color::BLACK
+                    }
+                    .into(),
+                ),
                 ..Default::default()
-            }),
-        )
+            }
+        }))
         .on_press(Message::CloseSwitcher);
 
         let overlay = container(switcher_popover(state, p))
@@ -617,9 +646,12 @@ fn layout(state: &State, p: Palette, narrow: bool) -> Element<'_, Message> {
 fn back_bar(p: Palette) -> Element<'static, Message> {
     container(
         button(
-            row![icon(icon::CHEVRON, 14.0, p.accent), text("Back").size(13).color(p.accent)]
-                .spacing(4)
-                .align_y(Center),
+            row![
+                icon(icon::CHEVRON, 14.0, p.accent),
+                text("Back").size(13).color(p.accent)
+            ]
+            .spacing(4)
+            .align_y(Center),
         )
         .style(theme::small_btn(p))
         .padding([5, 10])
@@ -647,12 +679,17 @@ fn header(state: &State, p: Palette, narrow: bool) -> Element<'_, Message> {
     };
 
     // Tailnet switcher chip → opens the popover.
-    let cur_idx = snap.tailnets.iter().position(|t| t.id == snap.current_id).unwrap_or(0);
+    let cur_idx = snap
+        .tailnets
+        .iter()
+        .position(|t| t.id == snap.current_id)
+        .unwrap_or(0);
     let (cur_name, cur_email) = match snap.tailnets.iter().find(|t| t.id == snap.current_id) {
         Some(t) => (t.label(), t.user.login_name.clone()),
         None => ("No tailnet".to_string(), String::new()),
     };
-    let mut chip_text = column![text(cur_name.clone()).size(13).font(SEMI).color(p.text)].spacing(0);
+    let mut chip_text =
+        column![text(cur_name.clone()).size(13).font(SEMI).color(p.text)].spacing(0);
     if !narrow && !cur_email.is_empty() {
         chip_text = chip_text.push(text(cur_email).size(10.5).font(MONO).color(p.text3));
     }
@@ -683,7 +720,9 @@ fn header(state: &State, p: Palette, narrow: bool) -> Element<'_, Message> {
     if !narrow {
         pill_row = pill_row.push(text(status_label).size(12.5).color(status_color));
     }
-    let pill = container(pill_row).padding([5, 10]).style(theme::pill(tint, 8.0));
+    let pill = container(pill_row)
+        .padding([5, 10])
+        .style(theme::pill(tint, 8.0));
 
     // Connect / disconnect.
     let conn_label = if snap.online { "Disconnect" } else { "Connect" };
@@ -736,10 +775,14 @@ fn sidebar(state: &State, p: Palette, full: bool) -> Element<'_, Message> {
         row![
             icon(icon::MONITOR, 18.0, p.text2),
             column![
-                text(if snap.machine.is_empty() { "This machine".into() } else { snap.machine.clone() })
-                    .size(13.5)
-                    .font(SEMI)
-                    .color(p.text),
+                text(if snap.machine.is_empty() {
+                    "This machine".into()
+                } else {
+                    snap.machine.clone()
+                })
+                .size(13.5)
+                .font(SEMI)
+                .color(p.text),
                 text("This machine").size(11).color(p.text3),
             ]
             .spacing(1),
@@ -767,7 +810,12 @@ fn sidebar(state: &State, p: Palette, full: bool) -> Element<'_, Message> {
         let trailing: Element<Message> = if peer.exit_node {
             badge("EXIT", p.exit, p.exit_bg)
         } else {
-            let frag = peer.primary_addr().rsplit('.').next().map(|s| format!("…{s}")).unwrap_or_default();
+            let frag = peer
+                .primary_addr()
+                .rsplit('.')
+                .next()
+                .map(|s| format!("…{s}"))
+                .unwrap_or_default();
             text(frag).size(11.5).font(MONO).color(p.text3).into()
         };
         let name_color = if peer.online { p.text } else { p.text2 };
@@ -775,7 +823,10 @@ fn sidebar(state: &State, p: Palette, full: bool) -> Element<'_, Message> {
             button(
                 row![
                     dot(if peer.online { p.online } else { p.offline }, peer.online),
-                    text(peer.name.clone()).size(13).font(SEMI).color(name_color),
+                    text(peer.name.clone())
+                        .size(13)
+                        .font(SEMI)
+                        .color(name_color),
                     Space::new().width(Fill),
                     trailing,
                 ]
@@ -795,9 +846,16 @@ fn sidebar(state: &State, p: Palette, full: bool) -> Element<'_, Message> {
     let exit_active = snap.peers.iter().any(|x| x.exit_node);
     let footer = row![
         button(
-            row![icon(icon::GLOBE, 15.0, if exit_active { p.exit } else { p.text2 }), text("Exit node").size(12)]
-                .spacing(6)
-                .align_y(Center)
+            row![
+                icon(
+                    icon::GLOBE,
+                    15.0,
+                    if exit_active { p.exit } else { p.text2 }
+                ),
+                text("Exit node").size(12)
+            ]
+            .spacing(6)
+            .align_y(Center)
         )
         .style(theme::small_btn(p))
         .padding([6, 10])
@@ -876,8 +934,17 @@ fn this_machine(state: &State, p: Palette) -> Element<'static, Message> {
         ident = ident.push(kv_row("MagicDNS", snap.fqdn.clone(), p.text, p));
     }
     for addr in &snap.addrs {
-        let color = if addr.contains(':') { p.text2 } else { p.accent };
-        ident = ident.push(kv_row(if addr.contains(':') { "IPv6" } else { "IPv4" }, addr.clone(), color, p));
+        let color = if addr.contains(':') {
+            p.text2
+        } else {
+            p.accent
+        };
+        ident = ident.push(kv_row(
+            if addr.contains(':') { "IPv6" } else { "IPv4" },
+            addr.clone(),
+            color,
+            p,
+        ));
     }
 
     // Settings card.
@@ -937,9 +1004,12 @@ fn this_machine(state: &State, p: Palette) -> Element<'static, Message> {
                 .padding([6, 9])
                 .style(theme::input(p)),
             button(
-                row![icon(icon::PLUS, 13.0, p.accent), text("Add").size(12).color(p.accent)]
-                    .spacing(5)
-                    .align_y(Center)
+                row![
+                    icon(icon::PLUS, 13.0, p.accent),
+                    text("Add").size(12).color(p.accent)
+                ]
+                .spacing(5)
+                .align_y(Center)
             )
             .style(theme::secondary_btn(p))
             .padding([6, 12])
@@ -965,7 +1035,12 @@ fn netcheck_card(state: &State, p: Palette) -> Element<'static, Message> {
     let run = button(
         row![
             icon(icon::REFRESH, 14.0, p.text2),
-            text(if state.netcheck_running { "Running…" } else { "Run" }).size(12),
+            text(if state.netcheck_running {
+                "Running…"
+            } else {
+                "Run"
+            })
+            .size(12),
         ]
         .spacing(6)
         .align_y(Center),
@@ -987,10 +1062,17 @@ fn netcheck_card(state: &State, p: Palette) -> Element<'static, Message> {
 
     if let Some(r) = &state.netcheck {
         let bool_row = |label: &str, ok: bool, detail: String| -> Element<'static, Message> {
-            let (glyph, color) = if ok { (icon::CHECK, p.online) } else { (icon::CLOSE, p.text3) };
+            let (glyph, color) = if ok {
+                (icon::CHECK, p.online)
+            } else {
+                (icon::CLOSE, p.text3)
+            };
             row![
                 icon(glyph, 14.0, color),
-                text(label.to_string()).size(12.5).color(p.text2).width(Length::Fixed(120.0)),
+                text(label.to_string())
+                    .size(12.5)
+                    .color(p.text2)
+                    .width(Length::Fixed(120.0)),
                 text(detail).size(12.5).font(MONO).color(p.text),
             ]
             .spacing(8)
@@ -1003,18 +1085,43 @@ fn netcheck_card(state: &State, p: Palette) -> Element<'static, Message> {
             None => "—",
         };
         col = col.push(divider(p));
-        col = col.push(bool_row("UDP", r.udp, if r.udp { "working".into() } else { "blocked".into() }));
+        col = col.push(bool_row(
+            "UDP",
+            r.udp,
+            if r.udp {
+                "working".into()
+            } else {
+                "blocked".into()
+            },
+        ));
         col = col.push(bool_row("IPv4", r.ipv4, r.global_v4.clone()));
-        col = col.push(bool_row("IPv6", r.ipv6, if r.ipv6 { r.global_v6.clone() } else { "not available".into() }));
+        col = col.push(bool_row(
+            "IPv6",
+            r.ipv6,
+            if r.ipv6 {
+                r.global_v6.clone()
+            } else {
+                "not available".into()
+            },
+        ));
         col = col.push(bool_row(
             "NAT traversal",
             r.upnp == Some(true) || r.pmp == Some(true) || r.pcp == Some(true),
-            format!("UPnP {} · PMP {} · PCP {}", opt(r.upnp), opt(r.pmp), opt(r.pcp)),
+            format!(
+                "UPnP {} · PMP {} · PCP {}",
+                opt(r.upnp),
+                opt(r.pmp),
+                opt(r.pcp)
+            ),
         ));
         col = col.push(bool_row(
             "Captive portal",
             r.captive_portal != Some(true),
-            if r.captive_portal == Some(true) { "detected".into() } else { "none".into() },
+            if r.captive_portal == Some(true) {
+                "detected".into()
+            } else {
+                "none".into()
+            },
         ));
 
         // Preferred relay + nearest latencies.
@@ -1025,8 +1132,14 @@ fn netcheck_card(state: &State, p: Palette) -> Element<'static, Message> {
             col = col.push(
                 row![
                     icon(icon::PIN, 14.0, p.accent),
-                    text("Preferred relay").size(12.5).color(p.text2).width(Length::Fixed(120.0)),
-                    text(format!("region {region} · {:.0} ms", **ns as f64 / 1e6)).size(12.5).font(MONO).color(p.text),
+                    text("Preferred relay")
+                        .size(12.5)
+                        .color(p.text2)
+                        .width(Length::Fixed(120.0)),
+                    text(format!("region {region} · {:.0} ms", **ns as f64 / 1e6))
+                        .size(12.5)
+                        .font(MONO)
+                        .color(p.text),
                 ]
                 .spacing(8)
                 .align_y(Center),
@@ -1036,8 +1149,14 @@ fn netcheck_card(state: &State, p: Palette) -> Element<'static, Message> {
             col = col.push(
                 row![
                     Space::new().width(22),
-                    text(format!("region {region}")).size(12).color(p.text3).width(Length::Fixed(110.0)),
-                    text(format!("{:.0} ms", **ns as f64 / 1e6)).size(12).font(MONO).color(p.text2),
+                    text(format!("region {region}"))
+                        .size(12)
+                        .color(p.text3)
+                        .width(Length::Fixed(110.0)),
+                    text(format!("{:.0} ms", **ns as f64 / 1e6))
+                        .size(12)
+                        .font(MONO)
+                        .color(p.text2),
                 ]
                 .spacing(8),
             );
@@ -1066,7 +1185,11 @@ fn peer_detail(peer: &PeerView, p: Palette) -> Element<'static, Message> {
     let sub = text(format!(
         "{}{}",
         peer.fqdn,
-        if peer.os.is_empty() { String::new() } else { format!("  ·  {}", peer.os) }
+        if peer.os.is_empty() {
+            String::new()
+        } else {
+            format!("  ·  {}", peer.os)
+        }
     ))
     .size(12.5)
     .font(MONO)
@@ -1102,8 +1225,17 @@ fn peer_detail(peer: &PeerView, p: Palette) -> Element<'static, Message> {
     // Detail card.
     let mut info = column![].spacing(2);
     for addr in &peer.addrs {
-        let color = if addr.contains(':') { p.text2 } else { p.accent };
-        info = info.push(kv_row(if addr.contains(':') { "IPv6" } else { "IPv4" }, addr.clone(), color, p));
+        let color = if addr.contains(':') {
+            p.text2
+        } else {
+            p.accent
+        };
+        info = info.push(kv_row(
+            if addr.contains(':') { "IPv6" } else { "IPv4" },
+            addr.clone(),
+            color,
+            p,
+        ));
     }
     if !peer.routes.is_empty() {
         info = info.push(meta_row("Routes", peer.routes.join("  ·  "), p));
@@ -1125,21 +1257,38 @@ fn peer_detail(peer: &PeerView, p: Palette) -> Element<'static, Message> {
     };
     info = info.push(meta_row("Last seen", seen, p));
 
-    column![title, sub, actions, card(info.into(), p)].spacing(12).into()
+    column![title, sub, actions, card(info.into(), p)]
+        .spacing(12)
+        .into()
 }
 
 fn exit_picker(state: &State, p: Palette) -> Element<'static, Message> {
     let snap = &state.snap;
     let active = snap.peers.iter().any(|x| x.exit_node);
 
-    let title = row![icon(icon::GLOBE, 22.0, p.text), text("Exit node").size(20).font(SEMI).color(p.text)]
-        .spacing(10)
-        .align_y(Center);
+    let title = row![
+        icon(icon::GLOBE, 22.0, p.text),
+        text("Exit node").size(20).font(SEMI).color(p.text)
+    ]
+    .spacing(10)
+    .align_y(Center);
 
     // None / Automatic options.
     let mut options = column![
-        picker_row("None", "Use your own internet connection", !active, p, Message::ClearExitNode),
-        picker_row("Automatic", "Pick the best available node", false, p, Message::UseExitNodeAuto),
+        picker_row(
+            "None",
+            "Use your own internet connection",
+            !active,
+            p,
+            Message::ClearExitNode
+        ),
+        picker_row(
+            "Automatic",
+            "Pick the best available node",
+            false,
+            p,
+            Message::UseExitNodeAuto
+        ),
     ]
     .spacing(2);
 
@@ -1148,11 +1297,19 @@ fn exit_picker(state: &State, p: Palette) -> Element<'static, Message> {
     eligible.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     let mut peer_rows = column![caps("YOUR PEERS".into(), p)].spacing(2);
     if eligible.is_empty() {
-        peer_rows = peer_rows.push(text("No exit nodes available on this tailnet.").size(12.5).color(p.text3));
+        peer_rows = peer_rows.push(
+            text("No exit nodes available on this tailnet.")
+                .size(12.5)
+                .color(p.text3),
+        );
     } else {
         for peer in eligible {
             let sub = if peer.relay.is_empty() {
-                if peer.online { "online".to_string() } else { "offline".to_string() }
+                if peer.online {
+                    "online".to_string()
+                } else {
+                    "offline".to_string()
+                }
             } else {
                 format!("DERP {}", peer.relay)
             };
@@ -1179,9 +1336,14 @@ fn exit_picker(state: &State, p: Palette) -> Element<'static, Message> {
     );
 
     options = options.push(Space::new().height(8));
-    column![title, card(options.into(), p), card(peer_rows.into(), p), lan]
-        .spacing(16)
-        .into()
+    column![
+        title,
+        card(options.into(), p),
+        card(peer_rows.into(), p),
+        lan
+    ]
+    .spacing(16)
+    .into()
 }
 
 /// A selectable row used in the exit-node picker.
@@ -1239,7 +1401,10 @@ fn switcher_popover(state: &State, p: Palette) -> Element<'static, Message> {
         let name = t.label();
         let info = column![
             text(name.clone()).size(13.5).font(SEMI).color(p.text),
-            text(t.user.login_name.clone()).size(10.5).font(MONO).color(p.text3),
+            text(t.user.login_name.clone())
+                .size(10.5)
+                .font(MONO)
+                .color(p.text3),
         ]
         .spacing(0);
         let av = avatar_tile(&name, theme::account_color(p, idx), 30.0);
@@ -1250,8 +1415,12 @@ fn switcher_popover(state: &State, p: Palette) -> Element<'static, Message> {
                 .padding([4, 10])
                 .on_press(Message::RequestRemove(t.id.clone()));
             col = col.push(
-                container(row![av, info, Space::new().width(Fill), remove].spacing(10).align_y(Center))
-                    .padding([7, 8]),
+                container(
+                    row![av, info, Space::new().width(Fill), remove]
+                        .spacing(10)
+                        .align_y(Center),
+                )
+                .padding([7, 8]),
             );
             if state.confirm_remove.as_deref() == Some(t.id.as_str()) {
                 col = col.push(confirm_block(&name, &t.id, p));
@@ -1263,11 +1432,15 @@ fn switcher_popover(state: &State, p: Palette) -> Element<'static, Message> {
                 Space::new().width(18).into()
             };
             col = col.push(
-                button(row![av, info, Space::new().width(Fill), trailing].spacing(10).align_y(Center))
-                    .width(Fill)
-                    .padding([7, 8])
-                    .style(theme::row_btn(p, active))
-                    .on_press(Message::SwitchTailnet(t.id.clone())),
+                button(
+                    row![av, info, Space::new().width(Fill), trailing]
+                        .spacing(10)
+                        .align_y(Center),
+                )
+                .width(Fill)
+                .padding([7, 8])
+                .style(theme::row_btn(p, active))
+                .on_press(Message::SwitchTailnet(t.id.clone())),
             );
         }
     }
@@ -1275,9 +1448,12 @@ fn switcher_popover(state: &State, p: Palette) -> Element<'static, Message> {
     col = col.push(divider(p));
     col = col.push(
         button(
-            row![icon(icon::PLUS, 16.0, p.accent), text("Add tailnet").size(13).color(p.accent)]
-                .spacing(8)
-                .align_y(Center),
+            row![
+                icon(icon::PLUS, 16.0, p.accent),
+                text("Add tailnet").size(13).color(p.accent)
+            ]
+            .spacing(8)
+            .align_y(Center),
         )
         .width(Fill)
         .padding([8, 8])
@@ -1299,11 +1475,16 @@ fn avatar_tile(name: &str, color: Color, size: f32) -> Element<'static, Message>
         .next()
         .map(|c| c.to_uppercase().to_string())
         .unwrap_or_else(|| "?".into());
-    container(text(initial).size(size * 0.5).font(SEMI).color(Color::WHITE))
-        .center_x(size)
-        .center_y(size)
-        .style(theme::avatar(color))
-        .into()
+    container(
+        text(initial)
+            .size(size * 0.5)
+            .font(SEMI)
+            .color(Color::WHITE),
+    )
+    .center_x(size)
+    .center_y(size)
+    .style(theme::avatar(color))
+    .into()
 }
 
 /// The inline "forget this tailnet?" confirmation block.
@@ -1311,9 +1492,11 @@ fn confirm_block(name: &str, id: &str, p: Palette) -> Element<'static, Message> 
     let id = id.to_string();
     container(
         column![
-            text(format!("Forget {name}? You'll need to sign in again to use it."))
-                .size(12)
-                .color(p.text2),
+            text(format!(
+                "Forget {name}? You'll need to sign in again to use it."
+            ))
+            .size(12)
+            .color(p.text2),
             row![
                 button(text("Remove").size(12).color(Color::WHITE))
                     .style(theme::danger_btn(p))
@@ -1331,7 +1514,11 @@ fn confirm_block(name: &str, id: &str, p: Palette) -> Element<'static, Message> 
     .padding(10)
     .style(move |_| container::Style {
         background: Some(with_alpha(p.danger, 0.10).into()),
-        border: iced::Border { color: p.danger, width: 1.0, radius: 7.0.into() },
+        border: iced::Border {
+            color: p.danger,
+            width: 1.0,
+            radius: 7.0.into(),
+        },
         ..Default::default()
     })
     .into()
@@ -1344,7 +1531,10 @@ fn operator_banner(p: Palette) -> Element<'static, Message> {
         row![
             icon(icon::WARN, 18.0, p.warn),
             column![
-                text("alavai can't control Tailscale yet").size(13).font(SEMI).color(p.text),
+                text("alavai can't control Tailscale yet")
+                    .size(13)
+                    .font(SEMI)
+                    .color(p.text),
                 text("Your Linux user isn't the Tailscale operator, so most actions are disabled.")
                     .size(11.5)
                     .color(p.text2),
@@ -1371,7 +1561,11 @@ fn operator_banner(p: Palette) -> Element<'static, Message> {
     .width(Fill)
     .style(move |_| container::Style {
         background: Some(with_alpha(p.warn, 0.12).into()),
-        border: iced::Border { color: with_alpha(p.warn, 0.4), width: 1.0, radius: 0.0.into() },
+        border: iced::Border {
+            color: with_alpha(p.warn, 0.4),
+            width: 1.0,
+            radius: 0.0.into(),
+        },
         ..Default::default()
     })
     .into()
@@ -1387,14 +1581,19 @@ fn welcome(p: Palette) -> Element<'static, Message> {
             .color(p.text2),
         Space::new().height(4),
         button(
-            row![icon(icon::GLOBE, 16.0, Color::WHITE), text("Log in to Tailscale").size(13.5).color(Color::WHITE)]
-                .spacing(8)
-                .align_y(Center)
+            row![
+                icon(icon::GLOBE, 16.0, Color::WHITE),
+                text("Log in to Tailscale").size(13.5).color(Color::WHITE)
+            ]
+            .spacing(8)
+            .align_y(Center)
         )
         .style(theme::primary_btn(p))
         .padding([9, 18])
         .on_press(Message::StartLogin),
-        text("or connect a custom control server").size(11.5).color(p.text3),
+        text("or connect a custom control server")
+            .size(11.5)
+            .color(p.text3),
     ]
     .spacing(10)
     .align_x(Center)
@@ -1406,8 +1605,13 @@ fn welcome(p: Palette) -> Element<'static, Message> {
 fn daemon_down(p: Palette) -> Element<'static, Message> {
     column![
         icon(icon::WIFI_OFF, 40.0, p.danger),
-        text("Can't reach Tailscale").size(18).font(SEMI).color(p.text),
-        text("The tailscaled service doesn't seem to be running.").size(13).color(p.text2),
+        text("Can't reach Tailscale")
+            .size(18)
+            .font(SEMI)
+            .color(p.text),
+        text("The tailscaled service doesn't seem to be running.")
+            .size(13)
+            .color(p.text2),
         button(text("Retry").size(13).color(Color::WHITE))
             .style(theme::primary_btn(p))
             .padding([7, 16])
@@ -1440,11 +1644,17 @@ fn dot(color: Color, filled: bool) -> Element<'static, Message> {
         },
         ..Default::default()
     };
-    container(Space::new().width(9).height(9)).style(style).into()
+    container(Space::new().width(9).height(9))
+        .style(style)
+        .into()
 }
 
 fn caps(s: String, p: Palette) -> Element<'static, Message> {
-    text(s.to_uppercase()).size(10.5).font(MONO).color(p.text3).into()
+    text(s.to_uppercase())
+        .size(10.5)
+        .font(MONO)
+        .color(p.text3)
+        .into()
 }
 
 fn badge(label: &str, fg: Color, bg: Color) -> Element<'static, Message> {
@@ -1459,7 +1669,11 @@ fn badge_text(label: String, fg: Color, bg: Color) -> Element<'static, Message> 
 }
 
 fn status_line(online: bool, p: Palette) -> Element<'static, Message> {
-    let (label, color) = if online { ("Connected", p.online) } else { ("Disconnected", p.text2) };
+    let (label, color) = if online {
+        ("Connected", p.online)
+    } else {
+        ("Disconnected", p.text2)
+    };
     row![dot(color, online), text(label).size(13).color(color)]
         .spacing(8)
         .align_y(Center)
@@ -1469,7 +1683,10 @@ fn status_line(online: bool, p: Palette) -> Element<'static, Message> {
 /// A `label · mono value · Copy` row (for IPs, MagicDNS).
 fn kv_row(label: &str, value: String, value_color: Color, p: Palette) -> Element<'static, Message> {
     row![
-        text(label.to_string()).size(12).color(p.text3).width(Length::Fixed(100.0)),
+        text(label.to_string())
+            .size(12)
+            .color(p.text3)
+            .width(Length::Fixed(100.0)),
         text(value.clone()).size(12.5).font(MONO).color(value_color),
         Space::new().width(Fill),
         button(icon(icon::COPY, 14.0, p.text2))
@@ -1486,7 +1703,10 @@ fn kv_row(label: &str, value: String, value_color: Color, p: Palette) -> Element
 /// A `label · value` meta row (no copy).
 fn meta_row(label: &str, value: String, p: Palette) -> Element<'static, Message> {
     row![
-        text(label.to_string()).size(12).color(p.text3).width(Length::Fixed(100.0)),
+        text(label.to_string())
+            .size(12)
+            .color(p.text3)
+            .width(Length::Fixed(100.0)),
         text(value).size(12.5).color(p.text2),
     ]
     .spacing(8)

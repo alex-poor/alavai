@@ -89,15 +89,19 @@ fn main() -> Result<()> {
             let s = client.status()?;
             println!("Backend:  {}", s.backend_state);
             if let Some(node) = &s.self_node {
-                println!("Machine:  {} ({})", node.hostname, node.dns_name.trim_end_matches('.'));
+                println!(
+                    "Machine:  {} ({})",
+                    node.hostname,
+                    node.dns_name.trim_end_matches('.')
+                );
             }
             if !s.tailscale_ips.is_empty() {
                 println!("Address:  {}", s.tailscale_ips.join(", "));
             }
-            if let Ok(p) = client.current_profile() {
-                if !p.is_empty() {
-                    println!("Tailnet:  {}", p.label());
-                }
+            if let Ok(p) = client.current_profile()
+                && !p.is_empty()
+            {
+                println!("Tailnet:  {}", p.label());
             }
         }
 
@@ -167,8 +171,11 @@ fn main() -> Result<()> {
             println!("Allow LAN access:    {}", yn(p.exit_node_allow_lan));
             println!("Advertise exit node: {}", yn(p.advertises_exit_node()));
             let exit = if p.exit_node_active() {
-                let id = if !p.exit_node_id.is_empty() { p.exit_node_id.clone() } else { p.exit_node_ip.clone() };
-                id
+                if !p.exit_node_id.is_empty() {
+                    p.exit_node_id.clone()
+                } else {
+                    p.exit_node_ip.clone()
+                }
             } else {
                 "none".into()
             };
@@ -176,7 +183,11 @@ fn main() -> Result<()> {
             let subnets = p.subnet_routes();
             println!(
                 "Advertised routes:   {}",
-                if subnets.is_empty() { "none".into() } else { subnets.join(", ") }
+                if subnets.is_empty() {
+                    "none".into()
+                } else {
+                    subnets.join(", ")
+                }
             );
         }
 
@@ -209,16 +220,30 @@ fn main() -> Result<()> {
                     tags.push(format!("seen:{}", short_time(&p.last_seen)));
                 }
                 if p.active {
-                    tags.push(format!("↓{} ↑{}", human_bytes(p.rx_bytes), human_bytes(p.tx_bytes)));
+                    tags.push(format!(
+                        "↓{} ↑{}",
+                        human_bytes(p.rx_bytes),
+                        human_bytes(p.tx_bytes)
+                    ));
                 }
-                println!("{dot} {:<28} {:<16} {:<8} {}", p.hostname, ip, p.os, tags.join("  "));
+                println!(
+                    "{dot} {:<28} {:<16} {:<8} {}",
+                    p.hostname,
+                    ip,
+                    p.os,
+                    tags.join("  ")
+                );
             }
         }
 
         Command::Netcheck => {
             let r = localapi::netcheck()?;
             let yn = |b: bool| if b { "yes" } else { "no" };
-            let opt = |b: Option<bool>| match b { Some(true) => "yes", Some(false) => "no", None => "?" };
+            let opt = |b: Option<bool>| match b {
+                Some(true) => "yes",
+                Some(false) => "no",
+                None => "?",
+            };
             println!("UDP:            {}", yn(r.udp));
             println!("IPv4:           {}{}", yn(r.ipv4), fmt_global(&r.global_v4));
             println!("IPv6:           {}{}", yn(r.ipv6), fmt_global(&r.global_v6));
@@ -260,17 +285,26 @@ fn main() -> Result<()> {
 
         Command::AcceptRoutes { state } => {
             client.set_accept_routes(state.enabled())?;
-            println!("Accept routes: {}", if state.enabled() { "on" } else { "off" });
+            println!(
+                "Accept routes: {}",
+                if state.enabled() { "on" } else { "off" }
+            );
         }
 
         Command::LanAccess { state } => {
             client.set_exit_node_allow_lan(state.enabled())?;
-            println!("Allow LAN access: {}", if state.enabled() { "on" } else { "off" });
+            println!(
+                "Allow LAN access: {}",
+                if state.enabled() { "on" } else { "off" }
+            );
         }
 
         Command::AdvertiseExitNode { state } => {
             client.set_advertise_exit_node(state.enabled())?;
-            println!("Advertise exit node: {}", if state.enabled() { "on" } else { "off" });
+            println!(
+                "Advertise exit node: {}",
+                if state.enabled() { "on" } else { "off" }
+            );
         }
 
         Command::AdvertiseRoutes { routes } => {
