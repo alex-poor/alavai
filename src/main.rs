@@ -350,7 +350,10 @@ fn main() -> Result<()> {
             }
             None => {
                 let on = autostart::is_enabled()?;
-                println!("Launch on login: {}", if on { "enabled" } else { "disabled" });
+                println!(
+                    "Launch on login: {}",
+                    if on { "enabled" } else { "disabled" }
+                );
             }
         },
     }
