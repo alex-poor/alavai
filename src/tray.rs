@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use ksni::blocking::{Handle, TrayMethods};
-use ksni::menu::StandardItem;
+use ksni::menu::{StandardItem, SubMenu};
 use ksni::{Category, Icon, MenuItem, OfflineReason, Status as IconStatus, ToolTip, Tray};
 
 use crate::icon;
@@ -276,6 +276,9 @@ impl Tray for AppTray {
 
         items.push(MenuItem::Separator);
 
+        // ── About. ──
+        items.push(about_submenu());
+
         // ── Quit. ──
         let tx = self.tx.clone();
         items.push(
@@ -302,6 +305,44 @@ fn disabled(label: String) -> MenuItem<AppTray> {
         ..Default::default()
     }
     .into()
+}
+
+/// The "About" submenu: identity (from Cargo metadata) plus links that open in
+/// the browser. Plain disabled lines + link items — all a tray menu supports.
+fn about_submenu() -> MenuItem<AppTray> {
+    const REPO: &str = env!("CARGO_PKG_REPOSITORY");
+    let submenu = vec![
+        disabled(concat!("alavai ", env!("CARGO_PKG_VERSION")).into()),
+        disabled("Lightweight Tailscale client for Linux".into()),
+        disabled(concat!("License: ", env!("CARGO_PKG_LICENSE")).into()),
+        MenuItem::Separator,
+        StandardItem {
+            label: "View source…".into(),
+            activate: Box::new(|_| open_url(REPO)),
+            ..Default::default()
+        }
+        .into(),
+        StandardItem {
+            label: "Report an issue…".into(),
+            activate: Box::new(|_| open_url(concat!(env!("CARGO_PKG_REPOSITORY"), "/issues"))),
+            ..Default::default()
+        }
+        .into(),
+    ];
+    SubMenu {
+        label: "About".into(),
+        icon_name: "help-about".into(),
+        submenu,
+        ..Default::default()
+    }
+    .into()
+}
+
+/// Opens a URL in the user's browser via `xdg-open` (a packaged dependency).
+fn open_url(url: &str) {
+    if let Err(e) = ProcCommand::new("xdg-open").arg(url).spawn() {
+        eprintln!("alavai: open url failed: {e}");
+    }
 }
 
 impl AppTray {
