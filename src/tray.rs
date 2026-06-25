@@ -18,12 +18,13 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use ksni::blocking::{Handle, TrayMethods};
-use ksni::menu::{RadioGroup, RadioItem, StandardItem};
+use ksni::menu::{StandardItem, SubMenu};
 use ksni::{Category, Icon, MenuItem, OfflineReason, Status as IconStatus, ToolTip, Tray};
 
 use crate::icon;
 use crate::instance::{self, Instance};
 use crate::localapi::{self, Client, LiveState, Profile};
+use crate::notify::Notifier;
 
 /// Backstop interval for re-polling the profile list. Profiles aren't on the IPN
 /// bus, but a switch closes the bus stream and we refresh on that event (see
@@ -199,68 +200,51 @@ impl Tray for AppTray {
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let mut items: Vec<MenuItem<Self>> = Vec::new();
 
-        // Header: current machine / tailnet (non-interactive).
-        items.push(
-            StandardItem {
-                label: self.header_line(),
-                enabled: false,
-                ..Default::default()
-            }
-            .into(),
-        );
+        // ── Status header (non-interactive): machine + connection state. ──
+        items.push(disabled(self.header_line()));
         items.push(MenuItem::Separator);
 
-        // Open the main window.
-        let tx = self.tx.clone();
-        items.push(
-            StandardItem {
-                label: "Open window".into(),
-                activate: Box::new(move |_| {
-                    let _ = tx.send(Cmd::OpenWindow);
-                }),
-                ..Default::default()
-            }
-            .into(),
-        );
-        items.push(MenuItem::Separator);
-
-        // Headline: one-click tailnet switcher.
+        // ── Headline: one-click tailnet switcher. A labelled section plus an
+        //    explicit ✓ on the active tailnet — the bare radio dot read
+        //    ambiguously on some panels, and which one is current is the whole
+        //    point of this menu. ──
         if !self.snap.tailnets.is_empty() {
-            let selected = self
-                .snap
-                .tailnets
-                .iter()
-                .position(|p| p.id == self.snap.current_id)
-                .unwrap_or(0);
-            let tx = self.tx.clone();
-            items.push(
-                RadioGroup {
-                    selected,
-                    select: Box::new(move |this: &mut Self, idx| {
-                        if let Some(p) = this.snap.tailnets.get(idx) {
-                            let id = p.id.clone();
-                            // Optimistic: reflect the choice immediately, then
-                            // let the worker confirm via a refresh.
-                            this.snap.current_id = id.clone();
-                            let _ = tx.send(Cmd::Switch(id));
-                        }
-                    }),
-                    options: self
-                        .snap
-                        .tailnets
-                        .iter()
-                        .map(|p| RadioItem {
-                            label: p.label(),
+            items.push(disabled("Switch tailnet".into()));
+            for p in &self.snap.tailnets {
+                let active = p.id == self.snap.current_id;
+                // Marker column keeps every row aligned whether ticked or not.
+                let label = format!("{}  {}", if active { "✓" } else { " " }, p.label());
+                if active {
+                    // Already current: show it, but don't re-switch on click.
+                    items.push(
+                        StandardItem {
+                            label,
                             ..Default::default()
-                        })
-                        .collect(),
+                        }
+                        .into(),
+                    );
+                } else {
+                    let id = p.id.clone();
+                    let tx = self.tx.clone();
+                    items.push(
+                        StandardItem {
+                            label,
+                            activate: Box::new(move |this: &mut Self| {
+                                // Optimistic: reflect the choice immediately, then
+                                // let the worker confirm via a refresh.
+                                this.snap.current_id = id.clone();
+                                let _ = tx.send(Cmd::Switch(id.clone()));
+                            }),
+                            ..Default::default()
+                        }
+                        .into(),
+                    );
                 }
-                .into(),
-            );
+            }
             items.push(MenuItem::Separator);
         }
 
-        // Connect / disconnect.
+        // ── Connection toggle. ──
         let tx = self.tx.clone();
         items.push(
             StandardItem {
@@ -277,13 +261,13 @@ impl Tray for AppTray {
             .into(),
         );
 
-        // Manual refresh of the tailnet list.
+        // ── Open the main window. ──
         let tx = self.tx.clone();
         items.push(
             StandardItem {
-                label: "Refresh".into(),
+                label: "Open window…".into(),
                 activate: Box::new(move |_| {
-                    let _ = tx.send(Cmd::RefreshProfiles);
+                    let _ = tx.send(Cmd::OpenWindow);
                 }),
                 ..Default::default()
             }
@@ -292,7 +276,10 @@ impl Tray for AppTray {
 
         items.push(MenuItem::Separator);
 
-        // Quit.
+        // ── About. ──
+        items.push(about_submenu());
+
+        // ── Quit. ──
         let tx = self.tx.clone();
         items.push(
             StandardItem {
@@ -307,6 +294,54 @@ impl Tray for AppTray {
         );
 
         items
+    }
+}
+
+/// A non-interactive, greyed label used for section headers in the menu.
+fn disabled(label: String) -> MenuItem<AppTray> {
+    StandardItem {
+        label,
+        enabled: false,
+        ..Default::default()
+    }
+    .into()
+}
+
+/// The "About" submenu: identity (from Cargo metadata) plus links that open in
+/// the browser. Plain disabled lines + link items — all a tray menu supports.
+fn about_submenu() -> MenuItem<AppTray> {
+    const REPO: &str = env!("CARGO_PKG_REPOSITORY");
+    let submenu = vec![
+        disabled(concat!("alavai ", env!("CARGO_PKG_VERSION")).into()),
+        disabled("Lightweight Tailscale client for Linux".into()),
+        disabled(concat!("License: ", env!("CARGO_PKG_LICENSE")).into()),
+        MenuItem::Separator,
+        StandardItem {
+            label: "View source…".into(),
+            activate: Box::new(|_| open_url(REPO)),
+            ..Default::default()
+        }
+        .into(),
+        StandardItem {
+            label: "Report an issue…".into(),
+            activate: Box::new(|_| open_url(concat!(env!("CARGO_PKG_REPOSITORY"), "/issues"))),
+            ..Default::default()
+        }
+        .into(),
+    ];
+    SubMenu {
+        label: "About".into(),
+        icon_name: "help-about".into(),
+        submenu,
+        ..Default::default()
+    }
+    .into()
+}
+
+/// Opens a URL in the user's browser via `xdg-open` (a packaged dependency).
+fn open_url(url: &str) {
+    if let Err(e) = ProcCommand::new("xdg-open").arg(url).spawn() {
+        eprintln!("alavai: open url failed: {e}");
     }
 }
 
@@ -327,12 +362,18 @@ impl AppTray {
         }
     }
 
+    /// Top line of the menu: machine + connection state. The tailnet is shown
+    /// (and marked active) in the switcher section below, so it isn't repeated
+    /// here. Hover the icon for the full machine — tailnet — IP tooltip.
     fn header_line(&self) -> String {
         if self.snap.online {
-            let l = self.machine_line();
-            if l.is_empty() { "Connected".into() } else { l }
+            if self.snap.machine.is_empty() {
+                "Connected".into()
+            } else {
+                format!("{} — Connected", self.snap.machine)
+            }
         } else {
-            "Tailscale: disconnected".into()
+            "Disconnected".into()
         }
     }
 }
@@ -428,11 +469,30 @@ pub fn run(open_window: bool) -> Result<()> {
 }
 
 fn worker(client: Client, rx: std::sync::mpsc::Receiver<Cmd>, handle: Handle<AppTray>) {
+    let mut notifier = Notifier::new();
+    // Track connection state so we only notify on real transitions (including
+    // ones driven from elsewhere), not on every bus delta.
+    let mut last_online = handle.update(|t| t.snap.online).unwrap_or(false);
+
     for cmd in rx {
         let alive = match cmd {
             Cmd::Switch(id) => {
-                if let Err(e) = client.switch_profile(&id) {
-                    eprintln!("alavai: switch tailnet failed: {e}");
+                match client.switch_profile(&id) {
+                    Ok(()) => {
+                        let label = client
+                            .current_profile()
+                            .ok()
+                            .filter(|p| !p.is_empty())
+                            .map(|p| p.label());
+                        match label {
+                            Some(l) => notifier.show("alavai", &format!("Switched to {l}")),
+                            None => notifier.show("alavai", "Switched tailnet"),
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("alavai: switch tailnet failed: {e}");
+                        notifier.show("alavai", "Couldn’t switch tailnet");
+                    }
                 }
                 // Live bits update via the bus; confirm the active profile here.
                 refresh_profiles(&client, &handle)
@@ -442,9 +502,22 @@ fn worker(client: Client, rx: std::sync::mpsc::Receiver<Cmd>, handle: Handle<App
                 if let Err(e) = client.set_want_running(!online) {
                     eprintln!("alavai: toggle connection failed: {e}");
                 }
-                Some(()) // connection state arrives via the bus
+                Some(()) // connection state (and its notification) arrive via the bus
             }
-            Cmd::Live(live) => handle.update(move |t| t.snap.apply_live(live)),
+            Cmd::Live(live) => {
+                if live.online != last_online {
+                    last_online = live.online;
+                    notifier.show(
+                        "alavai",
+                        if live.online {
+                            "Connected"
+                        } else {
+                            "Disconnected"
+                        },
+                    );
+                }
+                handle.update(move |t| t.snap.apply_live(live))
+            }
             Cmd::RefreshProfiles => refresh_profiles(&client, &handle),
             Cmd::OpenWindow => {
                 open_main_window();
