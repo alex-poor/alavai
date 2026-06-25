@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use ksni::blocking::{Handle, TrayMethods};
-use ksni::menu::{RadioGroup, RadioItem, StandardItem};
+use ksni::menu::StandardItem;
 use ksni::{Category, Icon, MenuItem, OfflineReason, Status as IconStatus, ToolTip, Tray};
 
 use crate::icon;
@@ -199,68 +199,51 @@ impl Tray for AppTray {
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let mut items: Vec<MenuItem<Self>> = Vec::new();
 
-        // Header: current machine / tailnet (non-interactive).
-        items.push(
-            StandardItem {
-                label: self.header_line(),
-                enabled: false,
-                ..Default::default()
-            }
-            .into(),
-        );
+        // ── Status header (non-interactive): machine + connection state. ──
+        items.push(disabled(self.header_line()));
         items.push(MenuItem::Separator);
 
-        // Open the main window.
-        let tx = self.tx.clone();
-        items.push(
-            StandardItem {
-                label: "Open window".into(),
-                activate: Box::new(move |_| {
-                    let _ = tx.send(Cmd::OpenWindow);
-                }),
-                ..Default::default()
-            }
-            .into(),
-        );
-        items.push(MenuItem::Separator);
-
-        // Headline: one-click tailnet switcher.
+        // ── Headline: one-click tailnet switcher. A labelled section plus an
+        //    explicit ✓ on the active tailnet — the bare radio dot read
+        //    ambiguously on some panels, and which one is current is the whole
+        //    point of this menu. ──
         if !self.snap.tailnets.is_empty() {
-            let selected = self
-                .snap
-                .tailnets
-                .iter()
-                .position(|p| p.id == self.snap.current_id)
-                .unwrap_or(0);
-            let tx = self.tx.clone();
-            items.push(
-                RadioGroup {
-                    selected,
-                    select: Box::new(move |this: &mut Self, idx| {
-                        if let Some(p) = this.snap.tailnets.get(idx) {
-                            let id = p.id.clone();
-                            // Optimistic: reflect the choice immediately, then
-                            // let the worker confirm via a refresh.
-                            this.snap.current_id = id.clone();
-                            let _ = tx.send(Cmd::Switch(id));
-                        }
-                    }),
-                    options: self
-                        .snap
-                        .tailnets
-                        .iter()
-                        .map(|p| RadioItem {
-                            label: p.label(),
+            items.push(disabled("Switch tailnet".into()));
+            for p in &self.snap.tailnets {
+                let active = p.id == self.snap.current_id;
+                // Marker column keeps every row aligned whether ticked or not.
+                let label = format!("{}  {}", if active { "✓" } else { " " }, p.label());
+                if active {
+                    // Already current: show it, but don't re-switch on click.
+                    items.push(
+                        StandardItem {
+                            label,
                             ..Default::default()
-                        })
-                        .collect(),
+                        }
+                        .into(),
+                    );
+                } else {
+                    let id = p.id.clone();
+                    let tx = self.tx.clone();
+                    items.push(
+                        StandardItem {
+                            label,
+                            activate: Box::new(move |this: &mut Self| {
+                                // Optimistic: reflect the choice immediately, then
+                                // let the worker confirm via a refresh.
+                                this.snap.current_id = id.clone();
+                                let _ = tx.send(Cmd::Switch(id.clone()));
+                            }),
+                            ..Default::default()
+                        }
+                        .into(),
+                    );
                 }
-                .into(),
-            );
+            }
             items.push(MenuItem::Separator);
         }
 
-        // Connect / disconnect.
+        // ── Connection toggle. ──
         let tx = self.tx.clone();
         items.push(
             StandardItem {
@@ -277,13 +260,13 @@ impl Tray for AppTray {
             .into(),
         );
 
-        // Manual refresh of the tailnet list.
+        // ── Open the main window. ──
         let tx = self.tx.clone();
         items.push(
             StandardItem {
-                label: "Refresh".into(),
+                label: "Open window…".into(),
                 activate: Box::new(move |_| {
-                    let _ = tx.send(Cmd::RefreshProfiles);
+                    let _ = tx.send(Cmd::OpenWindow);
                 }),
                 ..Default::default()
             }
@@ -292,7 +275,7 @@ impl Tray for AppTray {
 
         items.push(MenuItem::Separator);
 
-        // Quit.
+        // ── Quit. ──
         let tx = self.tx.clone();
         items.push(
             StandardItem {
@@ -308,6 +291,16 @@ impl Tray for AppTray {
 
         items
     }
+}
+
+/// A non-interactive, greyed label used for section headers in the menu.
+fn disabled(label: String) -> MenuItem<AppTray> {
+    StandardItem {
+        label,
+        enabled: false,
+        ..Default::default()
+    }
+    .into()
 }
 
 impl AppTray {
@@ -327,12 +320,18 @@ impl AppTray {
         }
     }
 
+    /// Top line of the menu: machine + connection state. The tailnet is shown
+    /// (and marked active) in the switcher section below, so it isn't repeated
+    /// here. Hover the icon for the full machine — tailnet — IP tooltip.
     fn header_line(&self) -> String {
         if self.snap.online {
-            let l = self.machine_line();
-            if l.is_empty() { "Connected".into() } else { l }
+            if self.snap.machine.is_empty() {
+                "Connected".into()
+            } else {
+                format!("{} — Connected", self.snap.machine)
+            }
         } else {
-            "Tailscale: disconnected".into()
+            "Disconnected".into()
         }
     }
 }
