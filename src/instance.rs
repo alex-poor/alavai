@@ -63,3 +63,10 @@ pub fn acquire() -> Instance {
         Err(_) => Instance::Primary,
     }
 }
+
+/// Removes the lock socket file so a replacement process (e.g. after a
+/// restart-to-update `exec`) can bind cleanly without the stale-socket reclaim
+/// dance. Best-effort; a leftover file is handled by [`acquire`] anyway.
+pub fn release() {
+    let _ = std::fs::remove_file(sock_path());
+}

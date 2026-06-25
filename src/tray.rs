@@ -11,6 +11,9 @@
 //! `watch-ipn-bus` stream; a profile switch closes that stream, which we use to
 //! refresh the (off-bus) profile list. A slow backstop poll covers the rest.
 
+use std::os::unix::fs::MetadataExt;
+use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
 use std::process::Command as ProcCommand;
 use std::sync::mpsc::{Sender, channel};
 use std::thread;
@@ -32,6 +35,11 @@ use crate::notify::Notifier;
 /// rare profile-list change that doesn't drop the bus. Everything else is
 /// event-driven.
 const PROFILE_POLL_INTERVAL: Duration = Duration::from_secs(60);
+
+/// How often to check whether our own on-disk binary changed (an upgrade). A
+/// resident daemon keeps running the old code after a package upgrade replaces
+/// `/usr/bin/alavai`; we detect that and offer a one-click restart.
+const UPGRADE_POLL_INTERVAL: Duration = Duration::from_secs(30);
 
 /// The slice of daemon state the tray renders.
 struct Snapshot {
@@ -107,6 +115,10 @@ enum Cmd {
     RefreshProfiles,
     /// Open the main window.
     OpenWindow,
+    /// Our on-disk binary changed (a package upgrade); offer to restart.
+    UpgradeAvailable,
+    /// Re-exec into the upgraded binary.
+    Restart,
     /// Tear down the tray and exit the process.
     Quit,
 }
@@ -114,6 +126,9 @@ enum Cmd {
 struct AppTray {
     snap: Snapshot,
     tx: Sender<Cmd>,
+    /// True once an upgrade was detected on disk; surfaces a "Restart to update"
+    /// menu item.
+    upgrade_available: bool,
 }
 
 impl Tray for AppTray {
@@ -203,6 +218,24 @@ impl Tray for AppTray {
         // ── Status header (non-interactive): machine + connection state. ──
         items.push(disabled(self.header_line()));
         items.push(MenuItem::Separator);
+
+        // ── Update alert: shown only after an on-disk upgrade is detected, at
+        //    the top so it's the first thing seen. Restarts into the new binary. ──
+        if self.upgrade_available {
+            let tx = self.tx.clone();
+            items.push(
+                StandardItem {
+                    label: "Restart to update".into(),
+                    icon_name: "system-software-update".into(),
+                    activate: Box::new(move |_| {
+                        let _ = tx.send(Cmd::Restart);
+                    }),
+                    ..Default::default()
+                }
+                .into(),
+            );
+            items.push(MenuItem::Separator);
+        }
 
         // ── Headline: one-click tailnet switcher. A labelled section plus an
         //    explicit ✓ on the active tailnet — the bare radio dot read
@@ -413,6 +446,7 @@ pub fn run(open_window: bool) -> Result<()> {
     let tray = AppTray {
         snap: Snapshot::fetch(&client),
         tx: tx.clone(),
+        upgrade_available: false,
     };
     // `assume_sni_available(true)`: treat "no watcher on the bus" as a soft
     // error routed to `watcher_offline` instead of a hard spawn failure, so the
@@ -463,12 +497,63 @@ pub fn run(open_window: bool) -> Result<()> {
         });
     }
 
+    // Watch our own binary for an in-place upgrade so we can offer to restart.
+    let exe = std::env::current_exe().ok();
+    if let Some(exe) = exe.clone() {
+        spawn_upgrade_watcher(exe, tx.clone());
+    }
+
     // Worker owns the blocking client and the tray handle.
-    worker(client, rx, handle);
+    worker(client, rx, handle, exe.unwrap_or_default());
     Ok(())
 }
 
-fn worker(client: Client, rx: std::sync::mpsc::Receiver<Cmd>, handle: Handle<AppTray>) {
+/// Identity of a binary on disk — `(inode, mtime)`. A package upgrade replaces
+/// `/usr/bin/alavai` with a new file, changing both.
+fn binary_fingerprint(path: &Path) -> Option<(u64, i64)> {
+    std::fs::metadata(path).ok().map(|m| (m.ino(), m.mtime()))
+}
+
+/// Polls our own executable; sends [`Cmd::UpgradeAvailable`] once it changes on
+/// disk (then stops — one alert is enough until the user restarts).
+fn spawn_upgrade_watcher(exe: PathBuf, tx: Sender<Cmd>) {
+    let Some(baseline) = binary_fingerprint(&exe) else {
+        return; // can't fingerprint (e.g. odd FS) → skip; not worth failing over
+    };
+    thread::spawn(move || {
+        loop {
+            thread::sleep(UPGRADE_POLL_INTERVAL);
+            match binary_fingerprint(&exe) {
+                // Changed and readable → an upgrade landed.
+                Some(cur) if cur != baseline => {
+                    let _ = tx.send(Cmd::UpgradeAvailable);
+                    break;
+                }
+                // Missing/unreadable (mid-upgrade rename) → ignore, keep watching.
+                _ => {}
+            }
+        }
+    });
+}
+
+/// Re-execs into the (upgraded) binary at `exe`, replacing this process. Tears
+/// the tray down first and frees the single-instance lock so the new image binds
+/// cleanly. Only returns (with an error logged) if the exec itself fails.
+fn restart(exe: &Path, handle: &Handle<AppTray>) -> ! {
+    handle.shutdown().wait();
+    instance::release();
+    // `exec` replaces the process image; restart the tray surface explicitly.
+    let err = ProcCommand::new(exe).arg("tray").exec();
+    eprintln!("alavai: restart failed: {err}; exiting so a relaunch picks up the update");
+    std::process::exit(1);
+}
+
+fn worker(
+    client: Client,
+    rx: std::sync::mpsc::Receiver<Cmd>,
+    handle: Handle<AppTray>,
+    exe: PathBuf,
+) {
     let mut notifier = Notifier::new();
     // Track connection state so we only notify on real transitions (including
     // ones driven from elsewhere), not on every bus delta.
@@ -523,6 +608,14 @@ fn worker(client: Client, rx: std::sync::mpsc::Receiver<Cmd>, handle: Handle<App
                 open_main_window();
                 Some(())
             }
+            Cmd::UpgradeAvailable => {
+                notifier.show(
+                    "alavai",
+                    "A new version is installed — choose “Restart to update”.",
+                );
+                handle.update(|t| t.upgrade_available = true)
+            }
+            Cmd::Restart => restart(&exe, &handle),
             Cmd::Quit => {
                 handle.shutdown().wait();
                 std::process::exit(0);
