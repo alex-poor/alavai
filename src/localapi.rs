@@ -802,9 +802,17 @@ struct NotifyHostinfo {
 // netcheck (connectivity diagnostics)
 // ---------------------------------------------------------------------------
 
-/// A connectivity diagnostics report. Obtained by running the `tailscale`
-/// CLI (`tailscale netcheck --format=json`) rather than the LocalAPI, which
-/// does not expose a full report.
+/// A connectivity diagnostics report.
+///
+/// This is the **one** place alavai shells out to the `tailscale` CLI. It is
+/// deliberate, not a gap: the LocalAPI exposes no netcheck endpoint (verified —
+/// `/localapi/v0/netcheck` etc. 404), and the report's data (DERP latencies,
+/// UPnP/PMP/PCP, global addresses) is *not* carried on the IPN bus — the netmap
+/// SelfNode `Hostinfo` omits `NetInfo`. The CLI computes the report by probing
+/// in-process; replicating that natively would mean re-implementing core
+/// Tailscale netcheck/STUN/DERP code (a moving target) for a single on-demand
+/// diagnostic, so we don't. The CLI is therefore an *optional* dependency: when
+/// absent, only this diagnostics panel is unavailable (it degrades gracefully).
 #[derive(Debug, Clone, Deserialize)]
 pub struct NetcheckReport {
     #[serde(rename = "UDP", default)]
@@ -838,12 +846,20 @@ pub struct NetcheckReport {
     pub region_latency: std::collections::HashMap<String, i64>,
 }
 
-/// Runs a connectivity check via the `tailscale` CLI.
+/// Runs a connectivity check via the `tailscale` CLI. Returns a clear,
+/// actionable error when the CLI isn't installed so callers can degrade rather
+/// than fail silently.
 pub fn netcheck() -> Result<NetcheckReport> {
-    let out = std::process::Command::new("tailscale")
+    let out = match std::process::Command::new("tailscale")
         .args(["netcheck", "--format=json"])
         .output()
-        .context("run `tailscale netcheck` (is the tailscale CLI installed?)")?;
+    {
+        Ok(out) => out,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            bail!("the tailscale CLI is not installed (required only for netcheck diagnostics)")
+        }
+        Err(e) => return Err(e).context("run `tailscale netcheck`"),
+    };
     if !out.status.success() {
         bail!(
             "tailscale netcheck failed: {}",

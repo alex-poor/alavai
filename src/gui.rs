@@ -118,6 +118,8 @@ struct State {
     /// Latest netcheck result, and whether one is running.
     netcheck: Option<NetcheckReport>,
     netcheck_running: bool,
+    /// Message from the last failed netcheck (e.g. CLI not installed).
+    netcheck_error: Option<String>,
     /// Whether the operator-permission banner has been dismissed this session.
     operator_dismissed: bool,
     /// Draft CIDR in the advertised-routes "add" field.
@@ -158,7 +160,7 @@ enum Message {
     StartLogin,
     // Diagnostics & robustness
     RunNetcheck,
-    NetcheckDone(Option<NetcheckReport>),
+    NetcheckDone(Result<NetcheckReport, String>),
     DismissOperator,
     Retry,
     // Advertised routes editor
@@ -361,6 +363,7 @@ fn boot() -> (State, Task<Message>) {
             last_login_url: None,
             netcheck: None,
             netcheck_running: false,
+            netcheck_error: None,
             operator_dismissed: false,
             route_input: String::new(),
             drilled: false,
@@ -607,12 +610,20 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         }
         Message::RunNetcheck => {
             state.netcheck_running = true;
-            Task::perform(async { localapi::netcheck().ok() }, Message::NetcheckDone)
+            state.netcheck_error = None;
+            Task::perform(
+                async { localapi::netcheck().map_err(|e| e.to_string()) },
+                Message::NetcheckDone,
+            )
         }
-        Message::NetcheckDone(report) => {
+        Message::NetcheckDone(result) => {
             state.netcheck_running = false;
-            if report.is_some() {
-                state.netcheck = report;
+            match result {
+                Ok(report) => {
+                    state.netcheck = Some(report);
+                    state.netcheck_error = None;
+                }
+                Err(msg) => state.netcheck_error = Some(msg),
             }
             Task::none()
         }
@@ -1295,10 +1306,20 @@ fn netcheck_card(state: &State, p: Palette) -> Element<'static, Message> {
                 .spacing(8),
             );
         }
-    } else if !state.netcheck_running {
-        col = col.push(text("Run a connectivity check.").size(12.5).color(p.text3));
-    } else {
+    } else if state.netcheck_running {
         col = col.push(text("Testing connectivity…").size(12.5).color(p.text3));
+    } else if let Some(err) = &state.netcheck_error {
+        col = col.push(divider(p));
+        col = col.push(
+            row![
+                icon(icon::WARN, 14.0, p.danger),
+                text(err.clone()).size(12.5).color(p.text2),
+            ]
+            .spacing(8)
+            .align_y(Center),
+        );
+    } else {
+        col = col.push(text("Run a connectivity check.").size(12.5).color(p.text3));
     }
 
     col.into()
