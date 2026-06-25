@@ -7,9 +7,9 @@
 //! Design: menu callbacks must not block (or the menu freezes — see ksni's
 //! docs), so they only *send* a [`Cmd`] down a channel. A single worker thread
 //! owns the blocking [`Client`] and the tray [`Handle`], applies each command,
-//! then refreshes the rendered snapshot. A ticker thread polls periodically so
-//! external changes (e.g. `tailscale up` elsewhere) show up. The event-driven
-//! `watch-ipn-bus` stream replaces polling in Phase 2.
+//! then refreshes the rendered snapshot. Updates are event-driven off the
+//! `watch-ipn-bus` stream; a profile switch closes that stream, which we use to
+//! refresh the (off-bus) profile list. A slow backstop poll covers the rest.
 
 use std::process::Command as ProcCommand;
 use std::sync::mpsc::{Sender, channel};
@@ -25,10 +25,12 @@ use crate::icon;
 use crate::instance::{self, Instance};
 use crate::localapi::{self, Client, LiveState, Profile};
 
-/// How often to re-poll the profile list. Profiles are not delivered on the IPN
-/// bus, so they still need polling — but only this; everything else is
-/// event-driven via [`Client::watch_live`].
-const PROFILE_POLL_INTERVAL: Duration = Duration::from_secs(10);
+/// Backstop interval for re-polling the profile list. Profiles aren't on the IPN
+/// bus, but a switch closes the bus stream and we refresh on that event (see
+/// [`Client::watch_live_with`]), so this timer is only a slow safety net for the
+/// rare profile-list change that doesn't drop the bus. Everything else is
+/// event-driven.
+const PROFILE_POLL_INTERVAL: Duration = Duration::from_secs(60);
 
 /// The slice of daemon state the tray renders.
 struct Snapshot {
@@ -387,17 +389,27 @@ pub fn run(open_window: bool) -> Result<()> {
         open_main_window();
     }
 
-    // Event-driven updates: stream the IPN bus and forward live deltas.
+    // Event-driven updates: stream the IPN bus and forward live deltas. A clean
+    // stream close means the profile was switched (locally or externally), so
+    // refresh the profile list then — profiles aren't on the bus.
     {
         let tx = tx.clone();
+        let reconnect_tx = tx.clone();
         thread::spawn(move || {
-            Client::default().watch_live(move |live| {
-                let _ = tx.send(Cmd::Live(live));
-            });
+            Client::default().watch_live_with(
+                move |live| {
+                    let _ = tx.send(Cmd::Live(live));
+                },
+                move || {
+                    let _ = reconnect_tx.send(Cmd::RefreshProfiles);
+                },
+            );
         });
     }
 
-    // Profiles aren't on the bus, so poll just the profile list periodically.
+    // Backstop poll: switches are now caught event-driven via the stream close
+    // above, so this only needs to catch the rare profile-list change that
+    // doesn't drop the bus (e.g. another tool adding a profile). Slow on purpose.
     {
         let tx = tx.clone();
         thread::spawn(move || {

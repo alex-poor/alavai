@@ -562,10 +562,25 @@ impl Client {
     /// Subscribes to the IPN bus and invokes `on_change` with the merged
     /// [`LiveState`] every time it changes. Blocks forever, reconnecting after a
     /// short delay if the stream drops (e.g. after a profile switch).
-    pub fn watch_live(&self, mut on_change: impl FnMut(LiveState)) {
+    pub fn watch_live(&self, on_change: impl FnMut(LiveState)) {
+        self.watch_live_with(on_change, || {});
+    }
+
+    /// Like [`Self::watch_live`], but also invokes `on_stream_end` each time the
+    /// bus stream closes cleanly. A profile switch tears the stream down, so a
+    /// clean close is the event-driven signal that the active profile (and list)
+    /// may have changed — letting consumers refresh profiles (which aren't on the
+    /// bus) without polling on a tight timer.
+    pub fn watch_live_with(
+        &self,
+        mut on_change: impl FnMut(LiveState),
+        mut on_stream_end: impl FnMut(),
+    ) {
         loop {
-            if let Err(e) = self.watch_once(&mut on_change) {
-                eprintln!("alavai: watch-ipn-bus: {e}; reconnecting in 2s…");
+            match self.watch_once(&mut on_change) {
+                // Clean close (EOF / final chunk): typically a profile switch.
+                Ok(()) => on_stream_end(),
+                Err(e) => eprintln!("alavai: watch-ipn-bus: {e}; reconnecting in 2s…"),
             }
             std::thread::sleep(Duration::from_secs(2));
         }
