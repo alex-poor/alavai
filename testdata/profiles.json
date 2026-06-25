@@ -1,0 +1,44 @@
+[
+  {
+    "ID": "profileA",
+    "Name": "example tailnet",
+    "NetworkProfile": {
+      "MagicDNSName": "example-tnet.ts.net",
+      "DomainName": "example-tnet.ts.net",
+      "DisplayName": "Example Tailnet"
+    },
+    "Key": "profile-key-a",
+    "UserProfile": {
+      "ID": 1,
+      "LoginName": "alice@example.com",
+      "DisplayName": "Alice Example"
+    },
+    "NodeID": "n1self",
+    "LocalUserID": "1000",
+    "ControlURL": "https://controlplane.tailscale.com"
+  },
+  {
+    "ID": "profileB",
+    "Name": "work org",
+    "NetworkProfile": {
+      "MagicDNSName": "work-org.ts.net",
+      "DomainName": "work-org.ts.net",
+      "DisplayName": "Work Org"
+    },
+    "Key": "profile-key-b",
+    "UserProfile": {
+      "ID": 2,
+      "LoginName": "alice@work.example",
+      "DisplayName": "Alice (work)"
+    },
+    "NodeID": "n9work",
+    "LocalUserID": "1000",
+    "ControlURL": "https://controlplane.tailscale.com"
+  },
+  {
+    "ID": "",
+    "Name": "",
+    "NetworkProfile": {},
+    "UserProfile": {"LoginName": ""}
+  }
+]

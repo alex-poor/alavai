@@ -26,6 +26,29 @@ const SOCKET_PATHS: &[&str] = &[
     "/var/run/tailscale/tailscaled.sock",
 ];
 
+// ---------------------------------------------------------------------------
+// Upstream coupling (read docs/SYNCING.md before bumping)
+// ---------------------------------------------------------------------------
+//
+// alavai mirrors `tailscaled`'s LocalAPI wire format by hand; it shares no code
+// with Tailscale. The LocalAPI is explicitly *not* a stable contract, so the
+// constants and structs here track these upstream Go packages:
+//   - endpoints + client : tailscale.com/client/local
+//   - Status, PeerStatus : tailscale.com/ipn/ipnstate
+//   - Prefs, Notify      : tailscale.com/ipn
+//   - LoginProfile       : tailscale.com/ipn  (ipn.LoginProfile)
+//   - NetInfo, netcheck  : tailscale.com/tailcfg, tailscale.com/net/netcheck
+//
+// The Tailscale version this snapshot was last verified against. Bumping it is a
+// reminder to refresh the golden fixtures in testdata/ (see SYNCING.md). Parsing
+// stays lenient (serde ignores unknown fields; `#[serde(default)]` everywhere)
+// so *additive* upstream changes are non-events; this constant only gates a soft
+// runtime hint on a major-version mismatch, never a hard failure.
+pub const TESTED_TAILSCALE_VERSION: &str = "1.98";
+
+/// The major version component of [`TESTED_TAILSCALE_VERSION`] (e.g. `1`).
+const TESTED_MAJOR: &str = "1";
+
 /// A blocking handle to the local `tailscaled` daemon.
 #[derive(Clone)]
 pub struct Client {
@@ -264,6 +287,10 @@ pub struct UserProfile {
 pub struct Status {
     #[serde(rename = "BackendState")]
     pub backend_state: String,
+    /// The running `tailscaled` version (e.g. "1.98.4"). Used for the soft
+    /// untested-version hint; empty if the daemon omits it.
+    #[serde(rename = "Version", default)]
+    pub version: String,
     #[serde(rename = "TailscaleIPs", default)]
     pub tailscale_ips: Vec<String>,
     #[serde(rename = "Self")]
@@ -276,6 +303,32 @@ impl Status {
     pub fn online(&self) -> bool {
         self.backend_state == "Running"
     }
+}
+
+/// Fetches the daemon version and prints the untested-version hint (if any) to
+/// stderr. Best-effort: a status fetch failure is silently ignored, since the
+/// caller surfaces real connection errors elsewhere.
+pub fn warn_if_untested_daemon(client: &Client) {
+    if let Ok(status) = client.status()
+        && let Some(msg) = untested_version_warning(&status.version)
+    {
+        eprintln!("{msg}");
+    }
+}
+
+/// Returns a one-line warning if the daemon's major version differs from the
+/// one alavai was verified against ([`TESTED_TAILSCALE_VERSION`]), else `None`.
+/// Minor/patch differences are expected and never warned about — only a major
+/// jump (e.g. 1.x → 2.x) is a likely wire-format break worth surfacing.
+pub fn untested_version_warning(daemon_version: &str) -> Option<String> {
+    let major = daemon_version.split('.').next().unwrap_or("");
+    if major.is_empty() || major == TESTED_MAJOR {
+        return None;
+    }
+    Some(format!(
+        "alavai: tailscaled {daemon_version} is a different major version than the \
+         tested {TESTED_TAILSCALE_VERSION}.x; some features may misbehave"
+    ))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -458,15 +511,27 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 // Event stream (watch-ipn-bus)
 // ---------------------------------------------------------------------------
 
-/// `ipn.State` value for a fully-connected backend.
+// `ipn.State` enum values (upstream: tailscale.com/ipn ipn.State).
+// Full set: NoState=0, InUseOtherUser=1, NeedsLogin=2, NeedsMachineAuth=3,
+// Stopped=4, Starting=5, Running=6. alavai only distinguishes the two it acts on.
+/// `ipn.State` value for a fully-connected backend (`ipn.Running`).
 const STATE_RUNNING: i64 = 6;
-/// `ipn.State` value for a backend with no tailnet logged in.
+/// `ipn.State` value for a backend with no tailnet logged in (`ipn.NeedsLogin`).
 const STATE_NEEDS_LOGIN: i64 = 2;
 
-/// The notify-mask bits we subscribe to: initial State, Prefs and NetMap, plus
-/// rate-limiting of netmap spam. (Engine/bandwidth updates are intentionally
-/// omitted until Phase 4 needs per-peer stats.)
-const WATCH_MASK: u64 = (1 << 1) | (1 << 2) | (1 << 3) | (1 << 8);
+// `ipn.NotifyWatchOpt` bit flags (upstream: tailscale.com/ipn ipn.NotifyWatch*).
+/// `NotifyInitialState` — emit the current State/Prefs/NetMap on connect.
+const NOTIFY_INITIAL_STATE: u64 = 1 << 1;
+/// `NotifyInitialPrefs` — include Prefs in the initial burst and on change.
+const NOTIFY_INITIAL_PREFS: u64 = 1 << 2;
+/// `NotifyInitialNetMap` — include the NetMap (self + peers) on connect/change.
+const NOTIFY_INITIAL_NETMAP: u64 = 1 << 3;
+/// `NotifyRateLimit` — coalesce frequent NetMap updates to cut bus spam.
+const NOTIFY_RATE_LIMIT: u64 = 1 << 8;
+/// The notify-mask bits we subscribe to. (Engine/bandwidth updates are
+/// intentionally omitted until per-peer stats need them.)
+const WATCH_MASK: u64 =
+    NOTIFY_INITIAL_STATE | NOTIFY_INITIAL_PREFS | NOTIFY_INITIAL_NETMAP | NOTIFY_RATE_LIMIT;
 
 /// The live, continuously-updated slice of daemon state derived from the IPN
 /// bus. Fields persist across the delta notifications the bus emits.
@@ -809,4 +874,149 @@ where
             _ => None,
         },
     })
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+//
+// Golden-fixture tests: deserialize representative (PII-free) LocalAPI JSON from
+// testdata/ into our mirror structs and assert the fields alavai relies on. This
+// is the drift tripwire — if an upstream rename/removal breaks a field we use,
+// these fail. The fixtures intentionally include extra/unknown keys to prove
+// parsing stays lenient (additive upstream changes must remain non-events).
+//
+// `live_daemon_matches_fixtures` (ignored by default) is the stronger check: it
+// hits the real running tailscaled and deserializes its actual output. Run it
+// against a pinned daemon — `cargo test -- --ignored` — when bumping
+// TESTED_TAILSCALE_VERSION or refreshing fixtures (see docs/SYNCING.md).
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_status_fixture() {
+        let s: Status = serde_json::from_str(include_str!("../testdata/status.json"))
+            .expect("status.json should deserialize");
+        assert!(s.online());
+        assert_eq!(s.version, "1.98.4");
+        assert_eq!(s.self_node.as_ref().unwrap().hostname, "laptop");
+        assert_eq!(s.tailscale_ips.len(), 2);
+        assert_eq!(s.peers.len(), 2);
+
+        let fileserver = s
+            .peers
+            .values()
+            .find(|p| p.hostname == "fileserver")
+            .expect("fileserver peer present");
+        assert!(fileserver.online);
+        assert!(fileserver.exit_node_option);
+        assert_eq!(fileserver.primary_routes, vec!["192.168.1.0/24"]);
+
+        let phone = s.peers.values().find(|p| p.hostname == "phone").unwrap();
+        assert!(!phone.online);
+        // PrimaryRoutes: null must decode to an empty Vec, not error.
+        assert!(phone.primary_routes.is_empty());
+    }
+
+    #[test]
+    fn parses_prefs_fixture() {
+        let p: Prefs = serde_json::from_str(include_str!("../testdata/prefs.json"))
+            .expect("prefs.json should deserialize");
+        assert!(p.route_all);
+        assert!(p.want_running);
+        assert!(p.exit_node_active());
+        assert!(p.advertises_exit_node());
+        assert_eq!(p.operator_user, "alex");
+        // The default routes are filtered out of the user-facing subnet list.
+        assert_eq!(p.subnet_routes(), vec!["192.168.50.0/24"]);
+    }
+
+    #[test]
+    fn parses_profiles_fixture() {
+        let profiles: Vec<Profile> =
+            serde_json::from_str(include_str!("../testdata/profiles.json"))
+                .expect("profiles.json should deserialize");
+        assert_eq!(profiles.len(), 3);
+        // label() prefers the domain name.
+        assert_eq!(profiles[0].label(), "example-tnet.ts.net");
+        assert_eq!(profiles[0].user.login_name, "alice@example.com");
+        // The trailing empty placeholder profile is recognised as empty.
+        assert!(profiles[2].is_empty());
+    }
+
+    #[test]
+    fn parses_netcheck_fixture() {
+        let r: NetcheckReport = serde_json::from_str(include_str!("../testdata/netcheck.json"))
+            .expect("netcheck.json should deserialize");
+        assert!(r.udp);
+        assert!(r.ipv4);
+        assert!(!r.ipv6);
+        assert_eq!(r.mapping_varies, Some(false));
+        assert_eq!(r.upnp, Some(false));
+        assert_eq!(r.pcp, None); // null tri-state → None
+        assert_eq!(r.preferred_derp, 5);
+        assert_eq!(r.global_v4, "203.0.113.7:41641");
+        assert_eq!(r.region_latency.get("5"), Some(&27412187));
+    }
+
+    #[test]
+    fn merges_state_notify() {
+        let n: Notify =
+            serde_json::from_str(include_str!("../testdata/notify_state.json")).unwrap();
+        assert_eq!(n.state, Some(STATE_RUNNING));
+        let mut live = LiveState::default();
+        assert!(merge_notify(&mut live, n));
+        assert!(live.online);
+        assert!(!live.needs_login);
+    }
+
+    #[test]
+    fn merges_prefs_notify() {
+        let n: Notify =
+            serde_json::from_str(include_str!("../testdata/notify_prefs.json")).unwrap();
+        let mut live = LiveState::default();
+        assert!(merge_notify(&mut live, n));
+        assert!(live.exit_node_active);
+        assert!(live.accept_routes);
+        assert!(live.advertise_exit_node);
+        assert!(live.allow_lan);
+        assert_eq!(live.advertised_routes, vec!["192.168.50.0/24"]);
+    }
+
+    #[test]
+    fn merges_netmap_notify() {
+        let n: Notify =
+            serde_json::from_str(include_str!("../testdata/notify_netmap.json")).unwrap();
+        let mut live = LiveState::default();
+        assert!(merge_notify(&mut live, n));
+        assert_eq!(live.machine, "laptop");
+        assert_eq!(live.fqdn, "laptop.example-tnet.ts.net");
+        assert_eq!(live.os, "linux");
+        // Address is stripped of its CIDR suffix and prefers IPv4.
+        assert_eq!(live.address, "100.100.0.1");
+        assert!(live.netmap_changed);
+    }
+
+    #[test]
+    fn version_warning_only_on_major_mismatch() {
+        assert_eq!(untested_version_warning("1.98.4"), None);
+        assert_eq!(untested_version_warning("1.2.0"), None);
+        assert_eq!(untested_version_warning(""), None);
+        assert!(untested_version_warning("2.0.0").is_some());
+    }
+
+    /// Drift tripwire against the *real* daemon. Ignored by default (needs a
+    /// running tailscaled + operator perms); run with `cargo test -- --ignored`.
+    #[test]
+    #[ignore = "requires a running tailscaled and operator permissions"]
+    fn live_daemon_matches_fixtures() {
+        let c = Client::default();
+        let status = c.status().expect("live status should parse");
+        assert!(!status.backend_state.is_empty());
+        c.prefs().expect("live prefs should parse");
+        c.profiles().expect("live profiles should parse");
+        c.current_profile()
+            .expect("live current profile should parse");
+    }
 }

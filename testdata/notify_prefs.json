@@ -1,0 +1,1 @@
+{"Prefs":{"ControlURL":"https://controlplane.tailscale.com","RouteAll":true,"ExitNodeID":"n2peer","ExitNodeIP":"","ExitNodeAllowLANAccess":true,"WantRunning":true,"AdvertiseRoutes":["192.168.50.0/24","0.0.0.0/0","::/0"],"OperatorUser":"alex","ProfileName":"example tailnet","Config":null}}

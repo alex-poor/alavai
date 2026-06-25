@@ -1,7 +1,9 @@
 # alavai — Architecture Notes
 
 Companion to [PLAN.md](PLAN.md). Captures how the pieces fit and the key
-LocalAPI details so future work doesn't have to re-derive them.
+LocalAPI details so future work doesn't have to re-derive them. For how alavai
+tracks upstream Tailscale's (unstable) LocalAPI wire format — the version
+coupling, golden fixtures, and refresh routine — see [SYNCING.md](SYNCING.md).
 
 ## Module layout (target)
 

@@ -1,0 +1,21 @@
+{
+  "Now": "2026-06-25T10:00:00Z",
+  "UDP": true,
+  "IPv6": false,
+  "IPv4": true,
+  "IPv6CanSend": false,
+  "IPv4CanSend": true,
+  "OSHasIPv6": true,
+  "ICMPv4": false,
+  "MappingVariesByDestIP": false,
+  "UPnP": false,
+  "PMP": false,
+  "PCP": null,
+  "PreferredDERP": 5,
+  "RegionLatency": {"1": 195113931, "5": 27412187, "2": 135599397},
+  "RegionV4Latency": {"5": 27412187},
+  "RegionV6Latency": {},
+  "GlobalV4": "203.0.113.7:41641",
+  "GlobalV6": "",
+  "CaptivePortal": null
+}

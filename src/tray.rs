@@ -22,7 +22,7 @@ use ksni::menu::{RadioGroup, RadioItem, StandardItem};
 use ksni::{Category, Icon, MenuItem, OfflineReason, Status as IconStatus, ToolTip, Tray};
 
 use crate::icon;
-use crate::localapi::{Client, LiveState, Profile};
+use crate::localapi::{self, Client, LiveState, Profile};
 
 /// How often to re-poll the profile list. Profiles are not delivered on the IPN
 /// bus, so they still need polling — but only this; everything else is
@@ -337,6 +337,7 @@ impl AppTray {
 /// Runs the tray daemon. Blocks until the user quits.
 pub fn run() -> Result<()> {
     let client = Client::default();
+    localapi::warn_if_untested_daemon(&client);
     let (tx, rx) = channel::<Cmd>();
 
     let tray = AppTray {

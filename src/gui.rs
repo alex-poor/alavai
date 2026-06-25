@@ -1958,6 +1958,8 @@ fn watch_stream() -> impl Stream<Item = Message> {
 
 /// Runs the GUI. Blocks until the window is closed.
 pub fn run() -> Result<()> {
+    localapi::warn_if_untested_daemon(&Client::default());
+
     let window_icon = icon::render_rgba(icon::TRAY_CONNECTED, 64)
         .and_then(|(w, h, rgba)| iced::window::icon::from_rgba(rgba, w, h).ok());
 

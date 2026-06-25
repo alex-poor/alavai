@@ -1,0 +1,22 @@
+{
+  "ControlURL": "https://controlplane.tailscale.com",
+  "RouteAll": true,
+  "ExitNodeID": "n2peer",
+  "ExitNodeIP": "",
+  "InternalExitNodePrior": "",
+  "ExitNodeAllowLANAccess": true,
+  "CorpDNS": true,
+  "RunSSH": false,
+  "WantRunning": true,
+  "LoggedOut": false,
+  "ShieldsUp": false,
+  "AdvertiseTags": null,
+  "Hostname": "",
+  "AdvertiseRoutes": ["192.168.50.0/24", "0.0.0.0/0", "::/0"],
+  "NetfilterMode": 2,
+  "OperatorUser": "alex",
+  "ProfileName": "example tailnet",
+  "AutoUpdate": {"Check": true, "Apply": false},
+  "PostureChecking": false,
+  "Config": null
+}
