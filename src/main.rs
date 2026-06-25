@@ -8,6 +8,7 @@ mod gui;
 mod icon;
 mod instance;
 mod localapi;
+mod notify;
 mod theme;
 mod tray;
 

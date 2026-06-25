@@ -24,6 +24,7 @@ use ksni::{Category, Icon, MenuItem, OfflineReason, Status as IconStatus, ToolTi
 use crate::icon;
 use crate::instance::{self, Instance};
 use crate::localapi::{self, Client, LiveState, Profile};
+use crate::notify::Notifier;
 
 /// Backstop interval for re-polling the profile list. Profiles aren't on the IPN
 /// bus, but a switch closes the bus stream and we refresh on that event (see
@@ -427,11 +428,30 @@ pub fn run(open_window: bool) -> Result<()> {
 }
 
 fn worker(client: Client, rx: std::sync::mpsc::Receiver<Cmd>, handle: Handle<AppTray>) {
+    let mut notifier = Notifier::new();
+    // Track connection state so we only notify on real transitions (including
+    // ones driven from elsewhere), not on every bus delta.
+    let mut last_online = handle.update(|t| t.snap.online).unwrap_or(false);
+
     for cmd in rx {
         let alive = match cmd {
             Cmd::Switch(id) => {
-                if let Err(e) = client.switch_profile(&id) {
-                    eprintln!("alavai: switch tailnet failed: {e}");
+                match client.switch_profile(&id) {
+                    Ok(()) => {
+                        let label = client
+                            .current_profile()
+                            .ok()
+                            .filter(|p| !p.is_empty())
+                            .map(|p| p.label());
+                        match label {
+                            Some(l) => notifier.show("alavai", &format!("Switched to {l}")),
+                            None => notifier.show("alavai", "Switched tailnet"),
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("alavai: switch tailnet failed: {e}");
+                        notifier.show("alavai", "Couldn’t switch tailnet");
+                    }
                 }
                 // Live bits update via the bus; confirm the active profile here.
                 refresh_profiles(&client, &handle)
@@ -441,9 +461,22 @@ fn worker(client: Client, rx: std::sync::mpsc::Receiver<Cmd>, handle: Handle<App
                 if let Err(e) = client.set_want_running(!online) {
                     eprintln!("alavai: toggle connection failed: {e}");
                 }
-                Some(()) // connection state arrives via the bus
+                Some(()) // connection state (and its notification) arrive via the bus
             }
-            Cmd::Live(live) => handle.update(move |t| t.snap.apply_live(live)),
+            Cmd::Live(live) => {
+                if live.online != last_online {
+                    last_online = live.online;
+                    notifier.show(
+                        "alavai",
+                        if live.online {
+                            "Connected"
+                        } else {
+                            "Disconnected"
+                        },
+                    );
+                }
+                handle.update(move |t| t.snap.apply_live(live))
+            }
             Cmd::RefreshProfiles => refresh_profiles(&client, &handle),
             Cmd::OpenWindow => {
                 open_main_window();
