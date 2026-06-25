@@ -23,6 +23,10 @@ clap = { version = "4", features = ["derive"] }
 # matters because iced_winit also opens a session-bus connection — under tokio
 # mode that path panics; under async-io it just works. Also drops tokio entirely.
 ksni = { version = "0.3.5", default-features = false, features = ["blocking", "async-io"] }
+# Desktop notifications (tray feedback). zbus is already in the tree via ksni, so
+# this adds no new crate — it just exposes the blocking API. Match ksni's
+# async-io backend (never tokio); `blocking-api` enables `zbus::blocking`.
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 # Already in the tree via iced's tiny-skia renderer; used directly to rasterize
 # the brand mesh icons for the tray (ARGB) and the window icon (RGBA).
 resvg = { version = "0.47", default-features = false }

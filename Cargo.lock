@@ -48,6 +48,7 @@ dependencies = [
  "resvg 0.47.0",
  "serde",
  "serde_json",
+ "zbus",
 ]
 
 [[package]]
