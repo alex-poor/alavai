@@ -321,6 +321,23 @@ where
     )
 }
 
+/// Opens a URL in the user's browser. Prefers `xdg-open` (honors the desktop's
+/// default browser); falls back to `$BROWSER` if `xdg-open` isn't installed
+/// (common on minimal tiling-WM setups without xdg-utils). Best-effort: the
+/// login URL is also kept in state so the user is never stranded if both fail.
+fn open_url(url: &str) {
+    if ProcCommand::new("xdg-open").arg(url).spawn().is_ok() {
+        return;
+    }
+    // $BROWSER may be a command with its own args; the URL is appended.
+    if let Ok(browser) = std::env::var("BROWSER")
+        && let Some(cmd) = browser.split_whitespace().next()
+    {
+        let args: Vec<&str> = browser.split_whitespace().skip(1).collect();
+        let _ = ProcCommand::new(cmd).args(args).arg(url).spawn();
+    }
+}
+
 // ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
@@ -383,7 +400,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             }
             if let Some(url) = new_login {
                 state.last_login_url = Some(url.clone());
-                let _ = ProcCommand::new("xdg-open").arg(&url).spawn();
+                open_url(&url);
                 state.toast = Some("Opened your browser to finish signing in".into());
                 return delayed_clear();
             }
@@ -409,7 +426,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             }
             if let Some(url) = new_login {
                 state.last_login_url = Some(url.clone());
-                let _ = ProcCommand::new("xdg-open").arg(&url).spawn();
+                open_url(&url);
                 state.toast = Some("Opened your browser to finish signing in".into());
                 return delayed_clear();
             }
@@ -521,7 +538,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::OpenAdmin => {
-            let _ = ProcCommand::new("xdg-open").arg(ADMIN_URL).spawn();
+            open_url(ADMIN_URL);
             Task::none()
         }
         Message::Toast(t) => {
