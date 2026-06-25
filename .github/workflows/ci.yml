@@ -39,3 +39,23 @@ jobs:
 
       - name: Test
         run: cargo test
+
+  # Supply-chain checks (cargo-deny): security advisories, license policy,
+  # banned/wildcard crates, and crate sources. Advisories are non-blocking so a
+  # newly-published RUSTSEC alert surfaces without blocking unrelated PRs; the
+  # license/bans/sources policy is enforced. Config lives in deny.toml.
+  cargo-deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        checks:
+          - advisories
+          - bans licenses sources
+    continue-on-error: ${{ matrix.checks == 'advisories' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check ${{ matrix.checks }}

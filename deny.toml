@@ -1,0 +1,44 @@
+# cargo-deny configuration — supply-chain checks for a deliberately
+# dependency-light project. Run locally with `cargo deny check`; CI runs the
+# same on every PR (see .github/workflows/ci.yml).
+
+[advisories]
+# RUSTSEC security advisories are denied by default. Yanked crates too. Add
+# specific advisory IDs here only with a written justification.
+yanked = "deny"
+ignore = []
+
+[licenses]
+# Permissive-only allow-list, plus GPL-3.0-or-later for alavai itself. Every
+# entry maps to a license actually present in the current tree; OR'd copyleft
+# alternatives (e.g. "MIT OR Apache-2.0 OR LGPL-2.1-or-later") are satisfied by
+# their permissive sibling, so they need no entry here. Adding a dependency that
+# introduces a new license fails CI until it's reviewed and listed.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "ISC",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+    "GPL-3.0-or-later",
+]
+# A few crates still use the legacy non-SPDX "MIT/Apache-2.0" slash form; accept
+# a slightly lower match confidence rather than fail on it.
+confidence-threshold = 0.8
+
+[bans]
+# Duplicate versions of a crate are common in transitive trees and not always
+# fixable, so warn rather than fail. Wildcard ("*") version requirements are a
+# real smell in our own manifest, so deny those.
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+# Only crates.io and explicitly-allowed git sources.
+unknown-registry = "deny"
+unknown-git = "deny"
