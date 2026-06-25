@@ -1,6 +1,6 @@
 # Maintainer: Alex Poor <alex@karo.co.nz>
 pkgname=alavai
-pkgver=0.2.1
+pkgver=0.2.2
 pkgrel=1
 pkgdesc="Lightweight Tailscale client for Linux with one-click tailnet switching"
 arch=('x86_64')
@@ -12,7 +12,7 @@ makedepends=('cargo' 'pkgconf')
 # Waybar, …); the window works without one. See docs/PACKAGING.md.
 optdepends=('ttf-dejavu: a sans + monospace font for the UI')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('988a19efe1b7172b3258b3b6556dae33e6ee0d58abee0d3b5899530db4c2d12b')
+sha256sums=('SKIP')
 
 prepare() {
 	cd "$pkgname-$pkgver"
