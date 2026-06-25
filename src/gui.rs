@@ -42,6 +42,8 @@ struct GuiSnapshot {
     machine: String,
     fqdn: String,
     os: String,
+    /// This machine's preferred DERP relay region (from status, no CLI needed).
+    self_relay: String,
     addrs: Vec<String>,
     tailnets: Vec<Profile>,
     current_id: String,
@@ -190,13 +192,14 @@ fn fetch_gui(client: &Client) -> GuiSnapshot {
         _ => true,
     };
 
-    let (machine, fqdn, os) = match status.as_ref().and_then(|s| s.self_node.as_ref()) {
+    let (machine, fqdn, os, self_relay) = match status.as_ref().and_then(|s| s.self_node.as_ref()) {
         Some(n) => (
             n.hostname.clone(),
             n.dns_name.trim_end_matches('.').to_string(),
             n.os.clone(),
+            n.relay.clone(),
         ),
-        None => (String::new(), String::new(), String::new()),
+        None => (String::new(), String::new(), String::new(), String::new()),
     };
     let addrs = status
         .as_ref()
@@ -247,6 +250,7 @@ fn fetch_gui(client: &Client) -> GuiSnapshot {
         machine,
         fqdn,
         os,
+        self_relay,
         addrs,
         tailnets,
         current_id,
@@ -1308,18 +1312,44 @@ fn netcheck_card(state: &State, p: Palette) -> Element<'static, Message> {
         }
     } else if state.netcheck_running {
         col = col.push(text("Testing connectivity…").size(12.5).color(p.text3));
-    } else if let Some(err) = &state.netcheck_error {
-        col = col.push(divider(p));
-        col = col.push(
-            row![
-                icon(icon::WARN, 14.0, p.danger),
-                text(err.clone()).size(12.5).color(p.text2),
-            ]
-            .spacing(8)
-            .align_y(Center),
-        );
     } else {
-        col = col.push(text("Run a connectivity check.").size(12.5).color(p.text3));
+        // No full report yet. Surface what we have *without* the tailscale CLI:
+        // the preferred DERP relay (from status), so the panel isn't empty even
+        // when the CLI is absent.
+        if !state.snap.self_relay.is_empty() {
+            col = col.push(divider(p));
+            col = col.push(
+                row![
+                    icon(icon::PIN, 14.0, p.accent),
+                    text("Preferred relay")
+                        .size(12.5)
+                        .color(p.text2)
+                        .width(Length::Fixed(120.0)),
+                    text(state.snap.self_relay.clone())
+                        .size(12.5)
+                        .font(MONO)
+                        .color(p.text),
+                ]
+                .spacing(8)
+                .align_y(Center),
+            );
+        }
+        if let Some(err) = &state.netcheck_error {
+            col = col.push(
+                row![
+                    icon(icon::WARN, 14.0, p.danger),
+                    text(err.clone()).size(12.5).color(p.text2),
+                ]
+                .spacing(8)
+                .align_y(Center),
+            );
+        } else {
+            col = col.push(
+                text("Run a check for full diagnostics.")
+                    .size(12.5)
+                    .color(p.text3),
+            );
+        }
     }
 
     col.into()

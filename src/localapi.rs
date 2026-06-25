@@ -339,6 +339,10 @@ pub struct Node {
     pub dns_name: String,
     #[serde(rename = "OS", default)]
     pub os: String,
+    /// Preferred DERP relay region code (e.g. "syd"); empty if direct/unknown.
+    /// The one netcheck-ish datum available without the `tailscale` CLI.
+    #[serde(rename = "Relay", default)]
+    pub relay: String,
 }
 
 /// A peer (another machine on the tailnet) from the `status` response.
@@ -931,7 +935,9 @@ mod tests {
             .expect("status.json should deserialize");
         assert!(s.online());
         assert_eq!(s.version, "1.98.4");
-        assert_eq!(s.self_node.as_ref().unwrap().hostname, "laptop");
+        let self_node = s.self_node.as_ref().unwrap();
+        assert_eq!(self_node.hostname, "laptop");
+        assert_eq!(self_node.relay, "syd");
         assert_eq!(s.tailscale_ips.len(), 2);
         assert_eq!(s.peers.len(), 2);
 
