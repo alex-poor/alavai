@@ -6,6 +6,13 @@ pkgdesc="Lightweight Tailscale client for Linux with one-click tailnet switching
 arch=('x86_64')
 url="https://github.com/alex-poor/alavai"
 license=('GPL-3.0-or-later')
+# Display libs: alavai's GUI/tray (iced + winit) is built with BOTH the Wayland
+# and X11 backends and picks one at runtime, so a single package runs on any
+# session — `wayland` covers Wayland, `libx11` covers X11 (it pulls libxcb), and
+# `libxkbcommon` handles keymaps on both. winit dlopen()s all of them, so the
+# `alavai` CLI alone needs none; they're hard deps so the tray/window work out of
+# the box after install. (libxcursor/libxi are optional niceties winit degrades
+# without.)
 depends=('tailscale' 'xdg-utils' 'wayland' 'libxkbcommon' 'libx11' 'gcc-libs' 'glibc')
 makedepends=('cargo' 'pkgconf')
 # The tray icon needs a StatusNotifierItem host (KDE, GNOME+AppIndicator,
@@ -25,6 +32,15 @@ build() {
 	export RUSTUP_TOOLCHAIN=stable
 	export CARGO_TARGET_DIR=target
 	cargo build --frozen --release
+}
+
+check() {
+	cd "$pkgname-$pkgver"
+	export RUSTUP_TOOLCHAIN=stable
+	export CARGO_TARGET_DIR=target
+	# Runs the LocalAPI golden-fixture tests; the live-daemon test is #[ignore]d,
+	# so this needs no running tailscaled. --release reuses build()'s artifacts.
+	cargo test --frozen --release
 }
 
 package() {
