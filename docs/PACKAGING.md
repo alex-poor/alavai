@@ -77,6 +77,34 @@ cd packaging
 makepkg -si
 ```
 
+#### Publishing / updating on the AUR
+
+The AUR package `alavai` builds from the tagged release tarball. The AUR is a
+separate git repo (only `PKGBUILD` + `.SRCINFO` are tracked).
+
+**First-time publish** (needs an [AUR account](https://aur.archlinux.org) with
+your SSH public key added under *My Account*):
+
+```sh
+git clone ssh://aur@aur.archlinux.org/alavai.git aur-alavai   # empty for a new pkg
+cd aur-alavai
+cp /path/to/alavai/packaging/PKGBUILD .
+makepkg --printsrcinfo > .SRCINFO          # regenerate whenever PKGBUILD changes
+git add PKGBUILD .SRCINFO
+git commit -m "alavai <version>"
+git push origin master                     # AUR's branch is master
+```
+
+**On each new release:**
+
+1. Bump `pkgver` (reset `pkgrel=1`) in `packaging/PKGBUILD`.
+2. `updpkgsums` (or compute the tag-tarball sha256) to refresh `sha256sums`.
+3. `makepkg --printsrcinfo > .SRCINFO`.
+4. Verify a clean build: `makepkg -f` (and `namcap PKGBUILD *.pkg.tar.zst`).
+5. Commit both files and `git push origin master`.
+
+Keep `packaging/PKGBUILD` here in sync with the one pushed to the AUR.
+
 ### Debian / Ubuntu
 
 `debian/control` dependency sketch:
