@@ -38,6 +38,17 @@ fn entry_path() -> Result<PathBuf> {
     Ok(autostart_dir()?.join(ENTRY))
 }
 
+/// Does a system-wide autostart entry exist (packaged into `/etc/xdg/autostart`
+/// or another `$XDG_CONFIG_DIRS` dir)? If so, deleting the user entry wouldn't
+/// disable it — per XDG, a same-named user file wins, so we mask with
+/// `Hidden=true` instead, and treat "no user entry" as enabled.
+fn system_entry_exists() -> bool {
+    let dirs = env::var_os("XDG_CONFIG_DIRS")
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "/etc/xdg".into());
+    env::split_paths(&dirs).any(|d| d.join("autostart").join(ENTRY).is_file())
+}
+
 /// The command the entry should launch. Prefer the absolute path of the running
 /// binary so it works for non-`PATH` and dev builds; fall back to bare `alavai`.
 fn exec_command() -> String {
@@ -55,7 +66,8 @@ fn exec_command() -> String {
 pub fn is_enabled() -> Result<bool> {
     let path = entry_path()?;
     let Ok(contents) = fs::read_to_string(&path) else {
-        return Ok(false);
+        // No user entry: enabled only if the package supplies a system-wide one.
+        return Ok(system_entry_exists());
     };
     let disabled = contents.lines().any(|line| {
         let l = line.trim().replace(' ', "").to_ascii_lowercase();
@@ -87,10 +99,23 @@ pub fn enable() -> Result<()> {
     Ok(())
 }
 
-/// Disable launch-on-login by removing the entry (idempotent: a missing entry
-/// is already "disabled").
+/// Disable launch-on-login (idempotent).
+///
+/// Normally we just remove our user entry. But if the package installed a
+/// system-wide entry, a removal wouldn't stop it firing — so we write a
+/// `Hidden=true` user entry, which XDG honours as a mask over the system copy.
 pub fn disable() -> Result<()> {
     let path = entry_path()?;
+    if system_entry_exists() {
+        let dir = autostart_dir()?;
+        fs::create_dir_all(&dir)
+            .with_context(|| format!("creating autostart directory {}", dir.display()))?;
+        let masked = "[Desktop Entry]\n\
+             Type=Application\n\
+             Name=alavai (tray)\n\
+             Hidden=true\n";
+        return fs::write(&path, masked).with_context(|| format!("writing {}", path.display()));
+    }
     match fs::remove_file(&path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),

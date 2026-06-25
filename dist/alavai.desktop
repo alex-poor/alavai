@@ -3,7 +3,9 @@ Type=Application
 Name=alavai
 GenericName=Tailscale client
 Comment=Lightweight Tailscale client with one-click tailnet switching
-Exec=alavai gui
+# Bare `alavai` starts the resident tray (the headline surface) and opens the
+# window for feedback; re-launching just focuses a window, never a second tray.
+Exec=alavai
 Icon=alavai
 Terminal=false
 Categories=Network;

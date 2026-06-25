@@ -6,6 +6,7 @@
 mod autostart;
 mod gui;
 mod icon;
+mod instance;
 mod localapi;
 mod theme;
 mod tray;
@@ -36,7 +37,7 @@ impl Toggle {
 )]
 struct Cli {
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand)]
@@ -88,9 +89,17 @@ enum Command {
 fn main() -> Result<()> {
     restore_default_sigpipe();
     let cli = Cli::parse();
+
+    // No subcommand = the default app launch (what the .desktop entry runs):
+    // become the resident tray and pop the window for visible feedback. The
+    // tray is the headline surface, so launching the app must produce its icon.
+    let Some(command) = cli.command else {
+        return tray::run(true);
+    };
+
     let client = Client::default();
 
-    match cli.command {
+    match command {
         Command::Status => {
             let s = client.status()?;
             println!("Backend:  {}", s.backend_state);
@@ -151,7 +160,8 @@ fn main() -> Result<()> {
         }
 
         Command::Tray => {
-            tray::run()?;
+            // Explicit/silent variant used by autostart-on-login: no window.
+            tray::run(false)?;
         }
 
         Command::Gui => {

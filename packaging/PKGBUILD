@@ -35,7 +35,8 @@ package() {
 	install -Dm644 "dist/$pkgname.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/$pkgname.svg"
 	install -Dm644 "LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 
-	# Optional: start the tray on login. Install the autostart entry yourself if
-	# wanted (uncomment), or copy dist/alavai-tray.desktop to ~/.config/autostart.
-	# install -Dm644 "dist/$pkgname-tray.desktop" "$pkgdir/etc/xdg/autostart/$pkgname-tray.desktop"
+	# Start the tray on login so the headline surface is there after a reboot.
+	# Users can turn this off in-app (or `alavai autostart off`), which masks
+	# this entry with a Hidden=true user override.
+	install -Dm644 "dist/$pkgname-tray.desktop" "$pkgdir/etc/xdg/autostart/$pkgname-tray.desktop"
 }

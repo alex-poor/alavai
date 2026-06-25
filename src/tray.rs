@@ -22,6 +22,7 @@ use ksni::menu::{RadioGroup, RadioItem, StandardItem};
 use ksni::{Category, Icon, MenuItem, OfflineReason, Status as IconStatus, ToolTip, Tray};
 
 use crate::icon;
+use crate::instance::{self, Instance};
 use crate::localapi::{self, Client, LiveState, Profile};
 
 /// How often to re-poll the profile list. Profiles are not delivered on the IPN
@@ -334,8 +335,34 @@ impl AppTray {
     }
 }
 
+/// Spawns the main window as a separate process (`alavai gui`). Used both by the
+/// menu's "Open window" item and at launch, so a click on the app gives visible
+/// feedback even when a panel makes the new tray icon easy to miss.
+fn open_main_window() {
+    match std::env::current_exe() {
+        Ok(exe) => {
+            if let Err(e) = ProcCommand::new(exe).arg("gui").spawn() {
+                eprintln!("alavai: open window failed: {e}");
+            }
+        }
+        Err(e) => eprintln!("alavai: locate executable: {e}"),
+    }
+}
+
 /// Runs the tray daemon. Blocks until the user quits.
-pub fn run() -> Result<()> {
+///
+/// `open_window` shows the main window once at startup — true for an explicit
+/// launch (the app launcher), false for a silent autostart-on-login. If a tray
+/// is already running, this instead just opens a window (when `open_window`) and
+/// returns, so re-launching the app never plants a second icon.
+pub fn run(open_window: bool) -> Result<()> {
+    if let Instance::AlreadyRunning = instance::acquire() {
+        if open_window {
+            open_main_window();
+        }
+        return Ok(());
+    }
+
     let client = Client::default();
     localapi::warn_if_untested_daemon(&client);
     let (tx, rx) = channel::<Cmd>();
@@ -353,6 +380,12 @@ pub fn run() -> Result<()> {
             "could not start the tray ({e}); is a StatusNotifierItem host running in your desktop?"
         )
     })?;
+
+    // Visible feedback for an explicit launch: open the window once the tray is
+    // registered.
+    if open_window {
+        open_main_window();
+    }
 
     // Event-driven updates: stream the IPN bus and forward live deltas.
     {
@@ -402,14 +435,7 @@ fn worker(client: Client, rx: std::sync::mpsc::Receiver<Cmd>, handle: Handle<App
             Cmd::Live(live) => handle.update(move |t| t.snap.apply_live(live)),
             Cmd::RefreshProfiles => refresh_profiles(&client, &handle),
             Cmd::OpenWindow => {
-                match std::env::current_exe() {
-                    Ok(exe) => {
-                        if let Err(e) = ProcCommand::new(exe).arg("gui").spawn() {
-                            eprintln!("alavai: open window failed: {e}");
-                        }
-                    }
-                    Err(e) => eprintln!("alavai: locate executable: {e}"),
-                }
+                open_main_window();
                 Some(())
             }
             Cmd::Quit => {
