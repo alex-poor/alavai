@@ -371,9 +371,23 @@ fn about_submenu() -> MenuItem<AppTray> {
     .into()
 }
 
+/// Spawns a fire-and-forget child and reaps it on a short-lived thread. The tray
+/// is long-lived and never `wait()`s on the windows / `xdg-open` helpers it
+/// launches, so without this they linger as `<defunct>` zombies until the tray
+/// exits. The reaper thread blocks on `wait()` and ends when the child does.
+fn spawn_reaped(mut cmd: ProcCommand) -> std::io::Result<()> {
+    let mut child = cmd.spawn()?;
+    thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
 /// Opens a URL in the user's browser via `xdg-open` (a packaged dependency).
 fn open_url(url: &str) {
-    if let Err(e) = ProcCommand::new("xdg-open").arg(url).spawn() {
+    let mut cmd = ProcCommand::new("xdg-open");
+    cmd.arg(url);
+    if let Err(e) = spawn_reaped(cmd) {
         eprintln!("alavai: open url failed: {e}");
     }
 }
@@ -417,7 +431,9 @@ impl AppTray {
 fn open_main_window() {
     match std::env::current_exe() {
         Ok(exe) => {
-            if let Err(e) = ProcCommand::new(exe).arg("gui").spawn() {
+            let mut cmd = ProcCommand::new(exe);
+            cmd.arg("gui");
+            if let Err(e) = spawn_reaped(cmd) {
                 eprintln!("alavai: open window failed: {e}");
             }
         }
