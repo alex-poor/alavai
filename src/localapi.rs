@@ -44,7 +44,7 @@ const SOCKET_PATHS: &[&str] = &[
 // stays lenient (serde ignores unknown fields; `#[serde(default)]` everywhere)
 // so *additive* upstream changes are non-events; this constant only gates a soft
 // runtime hint on a major-version mismatch, never a hard failure.
-pub const TESTED_TAILSCALE_VERSION: &str = "1.98";
+pub const TESTED_TAILSCALE_VERSION: &str = "1.104";
 
 /// The major version component of [`TESTED_TAILSCALE_VERSION`] (e.g. `1`).
 const TESTED_MAJOR: &str = "1";
@@ -291,11 +291,18 @@ pub struct Status {
     /// untested-version hint; empty if the daemon omits it.
     #[serde(rename = "Version", default)]
     pub version: String,
-    #[serde(rename = "TailscaleIPs", default)]
+    // On the IPN bus (`NotifyInitialStatus`) a logged-out daemon sends these as
+    // explicit JSON `null`, which `default` alone does not absorb (it only
+    // covers an *absent* key), so both tolerate null.
+    #[serde(
+        rename = "TailscaleIPs",
+        default,
+        deserialize_with = "null_as_empty_vec"
+    )]
     pub tailscale_ips: Vec<String>,
-    #[serde(rename = "Self")]
+    #[serde(rename = "Self", default)]
     pub self_node: Option<Node>,
-    #[serde(rename = "Peer", default)]
+    #[serde(rename = "Peer", default, deserialize_with = "null_as_default")]
     pub peers: std::collections::HashMap<String, Peer>,
 }
 
@@ -451,6 +458,16 @@ where
     Ok(Option::<Vec<String>>::deserialize(deserializer)?.unwrap_or_default())
 }
 
+/// Deserializes any `Default` type, treating an explicit JSON `null` as the
+/// default. (`#[serde(default)]` only covers an *absent* key, not `null`.)
+fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 /// Splits an HTTP/1.1 response into status + body, dechunking if necessary, and
 /// returns the body bytes. Errors on a non-2xx status, surfacing the body text.
 fn parse_http_response(raw: &[u8]) -> Result<Vec<u8>> {
@@ -524,18 +541,28 @@ const STATE_RUNNING: i64 = 6;
 const STATE_NEEDS_LOGIN: i64 = 2;
 
 // `ipn.NotifyWatchOpt` bit flags (upstream: tailscale.com/ipn ipn.NotifyWatch*).
-/// `NotifyInitialState` — emit the current State/Prefs/NetMap on connect.
+//
+// tailscale 1.104 removed the NetMap from the IPN bus: the former
+// `NotifyInitialNetMap` (1<<3) and `NotifyRateLimit` (1<<8) bits are now
+// *rejected* with HTTP 400 (ValidateNotifyWatchOpt). Self state is seeded once
+// from `NotifyInitialStatus` and then kept current by the always-on `SelfChange`
+// runtime notify; peer-set changes arrive as `PeersChanged`/`PeersRemoved`
+// deltas gated by `NotifyPeerChanges`, which we use purely as a "refresh peers
+// via status()" trigger (the peer list itself is still fetched, not parsed off
+// the bus).
+/// `NotifyInitialState` — emit the current State (+BrowseToURL) on connect.
 const NOTIFY_INITIAL_STATE: u64 = 1 << 1;
 /// `NotifyInitialPrefs` — include Prefs in the initial burst and on change.
 const NOTIFY_INITIAL_PREFS: u64 = 1 << 2;
-/// `NotifyInitialNetMap` — include the NetMap (self + peers) on connect/change.
-const NOTIFY_INITIAL_NETMAP: u64 = 1 << 3;
-/// `NotifyRateLimit` — coalesce frequent NetMap updates to cut bus spam.
-const NOTIFY_RATE_LIMIT: u64 = 1 << 8;
+/// `NotifyPeerChanges` — opt into PeersChanged/PeersRemoved peer-set deltas.
+const NOTIFY_PEER_CHANGES: u64 = 1 << 12;
+/// `NotifyInitialStatus` — seed the current `ipnstate.Status` (self + scalar
+/// fields) in the first Notify, replacing the removed initial NetMap.
+const NOTIFY_INITIAL_STATUS: u64 = 1 << 14;
 /// The notify-mask bits we subscribe to. (Engine/bandwidth updates are
 /// intentionally omitted until per-peer stats need them.)
 const WATCH_MASK: u64 =
-    NOTIFY_INITIAL_STATE | NOTIFY_INITIAL_PREFS | NOTIFY_INITIAL_NETMAP | NOTIFY_RATE_LIMIT;
+    NOTIFY_INITIAL_STATE | NOTIFY_INITIAL_PREFS | NOTIFY_PEER_CHANGES | NOTIFY_INITIAL_STATUS;
 
 /// The live, continuously-updated slice of daemon state derived from the IPN
 /// bus. Fields persist across the delta notifications the bus emits.
@@ -602,7 +629,29 @@ impl Client {
         (&stream).write_all(req.as_bytes())?;
 
         let mut reader = BufReader::new(&stream);
-        read_headers(&mut reader)?;
+        let head = read_headers(&mut reader)?;
+        if !(200..300).contains(&head.code) {
+            // A rejected subscription (e.g. an unsupported mask bit after a
+            // tailscaled upgrade) comes back as a normal HTTP error response,
+            // *not* a chunked stream. Surface it verbatim so the failure is
+            // actionable instead of looping on a bogus "parse chunk size".
+            let mut body = Vec::new();
+            match head.content_length {
+                Some(len) => {
+                    let mut buf = vec![0u8; len.min(4096)];
+                    let _ = reader.read_exact(&mut buf);
+                    body = buf;
+                }
+                None => {
+                    let _ = reader.read_to_end(&mut body);
+                }
+            }
+            bail!(
+                "watch-ipn-bus rejected with HTTP {}: {}",
+                head.code,
+                String::from_utf8_lossy(&body).trim()
+            );
+        }
 
         let mut live = LiveState::default();
         let mut linebuf: Vec<u8> = Vec::new();
@@ -635,8 +684,28 @@ impl Client {
     }
 }
 
-/// Reads (and discards) HTTP response headers up to and including the blank line.
-fn read_headers(reader: &mut impl BufRead) -> Result<()> {
+/// The parsed status line and framing of an HTTP response head.
+struct HttpHead {
+    code: u16,
+    content_length: Option<usize>,
+}
+
+/// Reads the HTTP status line and headers up to (and including) the blank line,
+/// returning the status code and any `Content-Length`. Unlike the chunked body
+/// that follows a 200, this makes no success assumption: callers must check
+/// `code` before treating the stream as the event feed.
+fn read_headers(reader: &mut impl BufRead) -> Result<HttpHead> {
+    let mut status_line = String::new();
+    if reader.read_line(&mut status_line)? == 0 {
+        bail!("connection closed before headers completed");
+    }
+    let code: u16 = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|c| c.parse().ok())
+        .ok_or_else(|| anyhow!("malformed HTTP status line: {:?}", status_line.trim()))?;
+
+    let mut content_length = None;
     loop {
         let mut line = String::new();
         let n = reader.read_line(&mut line)?;
@@ -644,7 +713,16 @@ fn read_headers(reader: &mut impl BufRead) -> Result<()> {
             bail!("connection closed before headers completed");
         }
         if line == "\r\n" || line == "\n" {
-            return Ok(());
+            return Ok(HttpHead {
+                code,
+                content_length,
+            });
+        }
+        if let Some((_, v)) = line
+            .split_once(':')
+            .filter(|(k, _)| k.trim().eq_ignore_ascii_case("content-length"))
+        {
+            content_length = v.trim().parse().ok();
         }
     }
 }
@@ -672,10 +750,13 @@ fn read_chunk_size(reader: &mut impl BufRead) -> Result<Option<usize>> {
 /// anything user-visible changed.
 fn merge_notify(live: &mut LiveState, n: Notify) -> bool {
     let mut changed = false;
-    // A NetMap in this delta means peers may have changed: always emit so the
-    // consumer can refresh its peer list, even if no self/prefs field changed.
-    let had_netmap = n.netmap.is_some();
-    live.netmap_changed = had_netmap;
+    // The bus no longer carries the NetMap. Peer-set changes arrive as
+    // PeersChanged/PeersRemoved deltas, and the initial status implies a fresh
+    // peer baseline; any of these means the consumer should refresh its peer
+    // list (which it fetches via `status()`), even if no self/prefs field moved.
+    let peers_touched =
+        n.initial_status.is_some() || n.peers_changed.is_some() || n.peers_removed.is_some();
+    live.netmap_changed = peers_touched;
 
     if let Some(state) = n.state {
         let online = state == STATE_RUNNING;
@@ -711,32 +792,33 @@ fn merge_notify(live: &mut LiveState, n: Notify) -> bool {
         }
     }
 
-    if let Some(sn) = n.netmap.and_then(|nm| nm.self_node) {
+    // Self state: seeded once from the initial `ipnstate.Status`, then kept
+    // current by the always-on `SelfChange` runtime notify (a `tailcfg.Node`).
+    // The two carry the same facts under different field names, so each is
+    // normalized before folding in.
+    if let Some(self_node) = n.initial_status.and_then(|s| {
+        let ips = s.tailscale_ips;
+        s.self_node.map(|node| (node, ips))
+    }) {
+        let (node, ips) = self_node;
+        let machine = if !node.hostname.is_empty() {
+            node.hostname
+        } else {
+            node.dns_name.trim_end_matches('.').to_string()
+        };
+        let fqdn = node.dns_name.trim_end_matches('.').to_string();
+        // `ipnstate.Status` IPs are already bare (no CIDR suffix).
+        changed |= apply_self(live, machine, fqdn, node.os, &ips);
+    }
+    if let Some(sn) = n.self_change {
         let machine = if !sn.hostinfo.hostname.is_empty() {
-            sn.hostinfo.hostname
+            sn.hostinfo.hostname.clone()
         } else {
             sn.name.trim_end_matches('.').to_string()
         };
         let fqdn = sn.name.trim_end_matches('.').to_string();
-        // NetMap addresses are CIDRs (e.g. 100.69.38.30/32); strip to bare IPs
-        // so they match the `status` representation the GUI also uses.
-        let addresses: Vec<String> = sn
-            .addresses
-            .iter()
-            .map(|a| a.split('/').next().unwrap_or(a).to_string())
-            .collect();
-        if machine != live.machine
-            || fqdn != live.fqdn
-            || sn.hostinfo.os != live.os
-            || addresses != live.addresses
-        {
-            live.machine = machine;
-            live.fqdn = fqdn;
-            live.os = sn.hostinfo.os;
-            live.address = pick_address(&sn.addresses);
-            live.addresses = addresses;
-            changed = true;
-        }
+        // `tailcfg.Node` addresses are CIDRs (e.g. 100.69.38.30/32).
+        changed |= apply_self(live, machine, fqdn, sn.hostinfo.os, &sn.addresses);
     }
 
     if let Some(url) = n.browse_to_url
@@ -747,7 +829,36 @@ fn merge_notify(live: &mut LiveState, n: Notify) -> bool {
         changed = true;
     }
 
-    changed || had_netmap
+    changed || peers_touched
+}
+
+/// Updates the self-identity fields of `live` from a node's machine name, FQDN,
+/// OS, and raw address list (CIDRs or bare IPs — both normalized to bare IPs).
+/// Returns whether anything user-visible changed.
+fn apply_self(
+    live: &mut LiveState,
+    machine: String,
+    fqdn: String,
+    os: String,
+    raw_addrs: &[String],
+) -> bool {
+    let addresses: Vec<String> = raw_addrs
+        .iter()
+        .map(|a| a.split('/').next().unwrap_or(a).to_string())
+        .collect();
+    if machine == live.machine
+        && fqdn == live.fqdn
+        && os == live.os
+        && addresses == live.addresses
+    {
+        return false;
+    }
+    live.address = pick_address(raw_addrs);
+    live.machine = machine;
+    live.fqdn = fqdn;
+    live.os = os;
+    live.addresses = addresses;
+    true
 }
 
 /// Picks a display address from a node's CIDR list, preferring IPv4.
@@ -769,8 +880,18 @@ struct Notify {
     state: Option<i64>,
     #[serde(rename = "Prefs", default)]
     prefs: Option<NotifyPrefs>,
-    #[serde(rename = "NetMap", default)]
-    netmap: Option<NotifyNetMap>,
+    /// Full `ipnstate.Status`, sent once in the first frame (NotifyInitialStatus).
+    #[serde(rename = "InitialStatus", default)]
+    initial_status: Option<Status>,
+    /// This node's own `tailcfg.Node`, pushed on every runtime self change.
+    #[serde(rename = "SelfChange", default)]
+    self_change: Option<NotifySelfNode>,
+    /// Peer-set deltas (NotifyPeerChanges). Parsed only for their presence — the
+    /// peer list itself is (re)fetched via `status()`, not read off the bus.
+    #[serde(rename = "PeersChanged", default)]
+    peers_changed: Option<serde_json::Value>,
+    #[serde(rename = "PeersRemoved", default)]
+    peers_removed: Option<serde_json::Value>,
     #[serde(rename = "BrowseToURL", default)]
     browse_to_url: Option<String>,
 }
@@ -793,12 +914,8 @@ struct NotifyPrefs {
     advertise_routes: Vec<String>,
 }
 
-#[derive(Deserialize)]
-struct NotifyNetMap {
-    #[serde(rename = "SelfNode", default)]
-    self_node: Option<NotifySelfNode>,
-}
-
+/// A node's identity as carried by the bus `SelfChange` field (`tailcfg.Node`):
+/// FQDN in `Name`, machine name + OS in `Hostinfo`, addresses as CIDRs.
 #[derive(Deserialize)]
 struct NotifySelfNode {
     #[serde(rename = "Name", default)]
@@ -1022,16 +1139,58 @@ mod tests {
     }
 
     #[test]
-    fn merges_netmap_notify() {
+    fn merges_initial_status_notify() {
+        // The first bus frame carries the full ipnstate.Status; self identity is
+        // seeded from Status.Self + the bare top-level TailscaleIPs.
         let n: Notify =
-            serde_json::from_str(include_str!("../testdata/notify_netmap.json")).unwrap();
+            serde_json::from_str(include_str!("../testdata/notify_initialstatus.json")).unwrap();
         let mut live = LiveState::default();
         assert!(merge_notify(&mut live, n));
         assert_eq!(live.machine, "laptop");
         assert_eq!(live.fqdn, "laptop.example-tnet.ts.net");
         assert_eq!(live.os, "linux");
-        // Address is stripped of its CIDR suffix and prefers IPv4.
+        assert_eq!(live.address, "100.100.0.1"); // IPv4 preferred
+        // Initial status implies a fresh peer baseline → trigger a peer refresh.
+        assert!(live.netmap_changed);
+    }
+
+    #[test]
+    fn tolerates_logged_out_initial_status() {
+        // A logged-out daemon sends TailscaleIPs/Peer as explicit JSON null on
+        // the bus; parsing must not fail (regression: tailscale 1.104 bus).
+        let n: Notify = serde_json::from_str(
+            r#"{"InitialStatus":{"BackendState":"NeedsLogin","TailscaleIPs":null,"Peer":null,"Self":{"HostName":"diablo","DNSName":"","OS":"linux","TailscaleIPs":null}}}"#,
+        )
+        .expect("logged-out InitialStatus must parse");
+        let mut live = LiveState::default();
+        merge_notify(&mut live, n);
+        assert_eq!(live.machine, "diablo");
+        assert!(live.addresses.is_empty());
+        assert!(live.netmap_changed);
+    }
+
+    #[test]
+    fn merges_self_change_notify() {
+        // Runtime self updates arrive as a tailcfg.Node under SelfChange, whose
+        // addresses are CIDRs and get stripped to bare IPs.
+        let n: Notify =
+            serde_json::from_str(include_str!("../testdata/notify_selfchange.json")).unwrap();
+        let mut live = LiveState::default();
+        assert!(merge_notify(&mut live, n));
+        assert_eq!(live.machine, "laptop");
+        assert_eq!(live.fqdn, "laptop.example-tnet.ts.net");
+        assert_eq!(live.os, "linux");
         assert_eq!(live.address, "100.100.0.1");
+        // A bare SelfChange is not a peer-set delta.
+        assert!(!live.netmap_changed);
+    }
+
+    #[test]
+    fn merges_peers_changed_notify() {
+        // A peer-set delta carries no self fields but must flag a peer refresh.
+        let n: Notify = serde_json::from_str(r#"{"PeersRemoved":["nABC"]}"#).unwrap();
+        let mut live = LiveState::default();
+        assert!(merge_notify(&mut live, n));
         assert!(live.netmap_changed);
     }
 

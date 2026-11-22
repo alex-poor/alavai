@@ -1,0 +1,1 @@
+{"InitialStatus":{"Version":"1.104.7","BackendState":"Running","TailscaleIPs":["100.100.0.1","fd7a:115c:a1e0::1"],"Self":{"ID":"n1self","HostName":"laptop","DNSName":"laptop.example-tnet.ts.net.","OS":"linux","TailscaleIPs":["100.100.0.1","fd7a:115c:a1e0::1"],"Relay":"syd","Online":true}}}
