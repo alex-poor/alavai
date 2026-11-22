@@ -846,10 +846,7 @@ fn apply_self(
         .iter()
         .map(|a| a.split('/').next().unwrap_or(a).to_string())
         .collect();
-    if machine == live.machine
-        && fqdn == live.fqdn
-        && os == live.os
-        && addresses == live.addresses
+    if machine == live.machine && fqdn == live.fqdn && os == live.os && addresses == live.addresses
     {
         return false;
     }
