@@ -1,0 +1,70 @@
+# nfpm config for alavai's .deb and .rpm packages.
+#
+# Used by .github/workflows/release.yml, which builds `target/release/alavai`
+# first and injects the version from the pushed tag via ${VERSION}. Build
+# locally with:
+#   VERSION=0.0.0 nfpm package -f packaging/nfpm.yaml -p deb -t .
+#
+# The install layout mirrors the table in docs/PACKAGING.md. Keep the two in
+# sync. The AUR package is built separately from the source tarball (PKGBUILD)
+# and is not produced here.
+name: alavai
+arch: amd64
+platform: linux
+version: ${VERSION}
+section: net
+priority: optional
+maintainer: alex-poor <alex-poor@users.noreply.github.com>
+description: |
+  A lightweight, distro-agnostic Tailscale client for Linux with one-click
+  tailnet switching. A single Rust binary plus a tray, GUI and CLI; its
+  rendering is pure Rust (no GTK/Qt/Skia/Cairo).
+vendor: alavai
+homepage: https://github.com/alex-poor/alavai
+license: GPL-3.0-or-later
+
+contents:
+  - src: ./target/release/alavai
+    dst: /usr/bin/alavai
+    file_info:
+      mode: 0755
+  - src: ./man/alavai.1
+    dst: /usr/share/man/man1/alavai.1
+    file_info:
+      mode: 0644
+  - src: ./dist/alavai.desktop
+    dst: /usr/share/applications/alavai.desktop
+    file_info:
+      mode: 0644
+  - src: ./dist/alavai.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/alavai.svg
+    file_info:
+      mode: 0644
+  # Optional autostart entry: starts the tray daemon on login.
+  - src: ./dist/alavai-tray.desktop
+    dst: /etc/xdg/autostart/alavai-tray.desktop
+    file_info:
+      mode: 0644
+  - src: ./LICENSE
+    dst: /usr/share/licenses/alavai/LICENSE
+    file_info:
+      mode: 0644
+
+# tailscaled and xdg-open are hard runtime requirements; the graphics client
+# libraries are loaded at runtime (alavai dlopen-free but linked against them),
+# so declare them per-format under their distro package names.
+overrides:
+  deb:
+    depends:
+      - tailscale
+      - xdg-utils
+      - libwayland-client0
+      - libxkbcommon0
+      - libx11-6
+  rpm:
+    depends:
+      - tailscale
+      - xdg-utils
+      - libwayland-client
+      - libxkbcommon
+      - libX11

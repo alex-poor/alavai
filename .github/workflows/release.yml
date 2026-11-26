@@ -1,0 +1,118 @@
+name: release
+
+# Runs when a version tag is pushed. Builds the release binary, produces the
+# .deb, .rpm and AppImage, then creates the GitHub Release (or, if a release
+# was already drafted by hand with curated notes, just attaches the assets to
+# it). This is the step that was previously manual and easy to forget.
+#
+# The AUR package is published separately from the source tarball (see
+# docs/PACKAGING.md) and is intentionally not built here.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  # Pinned tool versions (immutable tags). Bump deliberately.
+  NFPM_VERSION: '2.49.0'
+  APPIMAGETOOL_VERSION: '1.9.1'
+
+jobs:
+  release:
+    name: build packages · publish release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Derive version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libwayland-dev libxkbcommon-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Stage packaging tools
+        run: |
+          set -euo pipefail
+          tools="$RUNNER_TEMP/tools"
+          mkdir -p "$tools"
+          cd "$tools"
+
+          # nfpm: download the tarball and the project's own checksums, verify,
+          # then extract just the binary.
+          base="https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}"
+          curl -fsSLO "$base/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+          curl -fsSLO "$base/checksums.txt"
+          grep " nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz\$" checksums.txt | sha256sum -c -
+          tar -xzf "nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz" nfpm
+
+          # appimagetool: pinned immutable release tag (not "continuous").
+          curl -fsSL -o appimagetool \
+            "https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-x86_64.AppImage"
+
+          chmod +x nfpm appimagetool
+          echo "$tools" >> "$GITHUB_PATH"
+
+      - name: Build .deb and .rpm
+        run: |
+          set -euo pipefail
+          mkdir -p dist-packages
+          nfpm package -f packaging/nfpm.yaml -p deb -t dist-packages/
+          nfpm package -f packaging/nfpm.yaml -p rpm -t dist-packages/
+
+      - name: Build AppImage
+        env:
+          ARCH: x86_64
+          # appimagetool is itself an AppImage; GitHub runners have no FUSE.
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: |
+          set -euo pipefail
+          appdir="$RUNNER_TEMP/alavai.AppDir"
+          install -Dm755 target/release/alavai "$appdir/usr/bin/alavai"
+          install -Dm644 dist/alavai.desktop  "$appdir/usr/share/applications/alavai.desktop"
+          install -Dm644 dist/alavai.svg      "$appdir/usr/share/icons/hicolor/scalable/apps/alavai.svg"
+          # appimagetool looks for a .desktop and matching icon at the AppDir root.
+          cp dist/alavai.desktop "$appdir/alavai.desktop"
+          cp dist/alavai.svg     "$appdir/alavai.svg"
+          ln -s usr/bin/alavai   "$appdir/AppRun"
+          appimagetool "$appdir" "dist-packages/alavai-${VERSION}-x86_64.AppImage"
+
+      - name: Generate checksums
+        run: |
+          set -euo pipefail
+          cd dist-packages
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish release and attach assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # Release already exists (e.g. drafted by hand with curated notes).
+            echo "Release $tag exists; attaching assets."
+            gh release upload "$tag" dist-packages/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            echo "Creating release $tag with generated notes."
+            gh release create "$tag" dist-packages/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "alavai ${VERSION}" \
+              --generate-notes
+          fi
