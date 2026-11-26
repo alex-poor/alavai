@@ -123,6 +123,38 @@ BuildRequires: cargo, rust >= 1.85, pkgconfig, wayland-devel, libxkbcommon-devel
 Requires: tailscale, xdg-utils
 ```
 
+## Cutting a release
+
+A tag push drives everything. The
+[`release` workflow](../.github/workflows/release.yml) builds the binary and
+produces the `.deb`, `.rpm` and AppImage, then creates the GitHub Release and
+attaches them (with a `SHA256SUMS`). It triggers on any `v*` tag.
+
+Steps for version `X.Y.Z`:
+
+1. Bump `version` in `Cargo.toml` (and run a build so `Cargo.lock` updates).
+2. Bump `pkgver` and refresh `sha256sums` in `packaging/PKGBUILD` — but note the
+   tag tarball the sha covers only exists **after** you push the tag, so this is
+   usually a follow-up commit (see the recent history for the two-commit
+   pattern).
+3. Commit (`release: X.Y.Z`), then tag and push:
+   ```sh
+   git tag vX.Y.Z
+   git push origin main --tags
+   ```
+4. The `release` workflow runs on the tag and publishes the GitHub Release with
+   the built packages. **No manual `gh release create` is needed.** If you want
+   curated notes instead of auto-generated ones, create the release as a draft
+   *before* pushing the tag — the workflow detects the existing release and only
+   attaches assets to it.
+5. Update the AUR package separately (see
+   [Publishing / updating on the AUR](#publishing--updating-on-the-aur)); it
+   builds from the source tarball and is not produced by the workflow.
+
+The package layout is defined once in
+[`packaging/nfpm.yaml`](../packaging/nfpm.yaml); keep it in sync with the
+[install table](#what-to-install) above.
+
 ## Notes
 
 - alavai requires the invoking user to be the Tailscale **operator**
