@@ -19,7 +19,7 @@ makedepends=('cargo' 'pkgconf')
 # Waybar, …); the window works without one. See docs/PACKAGING.md.
 optdepends=('ttf-dejavu: a sans + monospace font for the UI')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('3fa0c16e054bdd66e86bde2ae51531ca4b4c6a32ea8fa84af2208358b9b4236b')
 
 prepare() {
 	cd "$pkgname-$pkgver"
