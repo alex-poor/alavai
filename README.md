@@ -6,13 +6,17 @@ self-contained binary, no GTK/Qt system dependencies, at home in any desktop
 environment or window manager.
 
 [![CI](https://github.com/alex-poor/alavai/actions/workflows/ci.yml/badge.svg)](https://github.com/alex-poor/alavai/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/alex-poor/alavai?sort=semver)](https://github.com/alex-poor/alavai/releases/latest)
+[![AUR](https://img.shields.io/aur/version/alavai)](https://aur.archlinux.org/packages/alavai)
 [![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 [![Made with Rust](https://img.shields.io/badge/made%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-> Status: **early but functional.** The system tray and main window are usable
-> today — see [Features](#features). A few features that depend on tailnet
-> settings we couldn't test against (Taildrop, Mullvad) are scoped but not yet
+> Status: **functional and packaged.** The system tray, main window, and CLI are
+> complete for everyday use and ship as prebuilt `.deb`/`.rpm`/AppImage packages
+> and on the [AUR](https://aur.archlinux.org/packages/alavai) — see
+> [Install](#install). A couple of features that depend on tailnet settings we
+> couldn't test against (Taildrop, Mullvad exit nodes) are scoped but not yet
 > built. Roadmap and progress: [docs/PLAN.md](docs/PLAN.md).
 
 ![alavai main window](docs/screenshot.png)
@@ -61,6 +65,25 @@ sudo tailscale set --operator=$USER
 
 ## Install
 
+### Arch Linux (AUR)
+
+alavai is on the AUR as [`alavai`](https://aur.archlinux.org/packages/alavai):
+
+```sh
+yay -S alavai      # or: paru -S alavai
+```
+
+### Prebuilt packages — `.deb` / `.rpm` / AppImage
+
+Every [release](https://github.com/alex-poor/alavai/releases/latest) ships an
+x86_64 `.deb`, `.rpm`, and AppImage (with a `SHA256SUMS`):
+
+```sh
+sudo dpkg -i alavai_*_amd64.deb                                 # Debian / Ubuntu
+sudo rpm -i alavai-*.x86_64.rpm                                 # Fedora / RHEL
+chmod +x alavai-*-x86_64.AppImage && ./alavai-*-x86_64.AppImage # any distro
+```
+
 ### Build from source
 
 Requirements: **Rust** (2024 edition — 1.85+) and the Tailscale CLI/daemon.
@@ -76,7 +99,8 @@ The tray needs a StatusNotifierItem host — KDE, GNOME with the AppIndicator
 extension, or most tray-capable window managers.
 
 A man page is provided at [`man/alavai.1`](man/alavai.1) (install to
-`$(mandir)/man1/`).
+`$(mandir)/man1/`). Distribution packagers: see
+[docs/PACKAGING.md](docs/PACKAGING.md).
 
 ## Usage
 
